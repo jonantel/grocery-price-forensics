@@ -18,42 +18,71 @@ LOW_CONF_THRESHOLD = 0.30
 MATCHER = os.environ.get("MATCHER_FUNCTION_NAME", "aldi-catalog-matcher")
 
 SYSTEM_PROMPT = (
-    "You are a grocery price forensics analyst. You are shown frames from a video walk through an Aldi store. "
+    "You are a grocery price analyst. You are shown frames from a video walk through a grocery store aisle. "
     "Extract EVERY unique grocery item and shelf price tag visible across all frames. "
-    "Return ONLY a valid JSON array (no prose, no markdown) of objects with exactly these keys: "
+    "Return ONLY one valid JSON object (no prose, no markdown) with exactly two keys:\n"
+    "\"items\": an array of objects, each with exactly these keys: "
     "brand (string), product_name (string), size_text (string, e.g. '12 ct' or '1 gal'), "
     "size_oz (number or null), in_store_price (float, dollars), unit_price_text (string, '' if not visible), "
     "canonical_commodity (string, generic name such as 'whole milk', 'eggs', 'potato chips'), "
-    "confidence ('high' if the text is clearly legible, otherwise 'low'). "
-    "Do not invent items that are not visible. Deduplicate items seen in multiple frames. "
-    "If nothing is visible return []."
+    "confidence ('high' if the text is clearly legible, otherwise 'low'), "
+    "upc_barcode (string of digits if a barcode number is clearly readable, otherwise null), "
+    "barcode_status ('read' if upc_barcode is filled in, 'unreadable' if a barcode is visible but cannot be read, "
+    "'not_visible' if no barcode is visible).\n"
+    "\"unreadable_tags\": an array of objects for shelf tags or barcodes that are visible but cannot be read, each with "
+    "reason ('blur' | 'glare' | 'cut_off' | 'barcode_unreadable') and partial_text (string, whatever text can be made out, '' if none).\n"
+    "Never guess a barcode number or a price; use null / unreadable_tags instead. "
+    "Deduplicate items seen in multiple frames. If nothing is visible return {\"items\": [], \"unreadable_tags\": []}."
 )
 
+VALID_REASONS = {"blur", "glare", "cut_off", "barcode_unreadable"}
+VALID_BARCODE = {"read", "unreadable", "not_visible"}
 
-def put_status(bucket, walk_id, stage, message):
+
+def put_status(bucket, walk_id, stage, message, **extra):
+    body = {"walk_id": walk_id, "stage": stage, "message": message}
+    body.update(extra)
     s3.put_object(
         Bucket=bucket,
         Key="public/status.json",
-        Body=json.dumps({"walk_id": walk_id, "stage": stage, "message": message}).encode(),
+        Body=json.dumps(body).encode(),
         ContentType="application/json",
         CacheControl="no-cache",
     )
 
 
-def parse_json_array(text):
+def parse_result(text):
+    """Parse model output into (items, unreadable_tags). Accepts the new object or a legacy bare array."""
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text).strip()
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        m = re.search(r"\[.*\]", text, re.S)
+        m = re.search(r"\{.*\}", text, re.S) or re.search(r"\[.*\]", text, re.S)
         if not m:
             raise
         data = json.loads(m.group(0))
-    if isinstance(data, dict):
-        data = data.get("items", [data])
-    return data
+    if isinstance(data, list):
+        data = {"items": data, "unreadable_tags": []}
+    items = [i for i in data.get("items", []) if isinstance(i, dict)]
+    for it in items:
+        upc = it.get("upc_barcode")
+        it["upc_barcode"] = re.sub(r"\D", "", str(upc)) or None if upc else None
+        status = str(it.get("barcode_status", "")).lower()
+        if status not in VALID_BARCODE:
+            status = "read" if it["upc_barcode"] else "not_visible"
+        if status == "read" and not it["upc_barcode"]:
+            status = "unreadable"
+        it["barcode_status"] = status
+    tags = []
+    for t in data.get("unreadable_tags", []) or []:
+        if not isinstance(t, dict):
+            continue
+        reason = str(t.get("reason", "blur")).lower()
+        tags.append({"reason": reason if reason in VALID_REASONS else "blur",
+                     "partial_text": str(t.get("partial_text", ""))[:120]})
+    return items, tags
 
 
 def call_claude(model, content):
@@ -100,21 +129,22 @@ def low_conf_ratio(items):
 
 def analyze(content):
     """Haiku first; fall back to Sonnet on error or >30% low-confidence tags."""
-    haiku_items = None
+    haiku = None
     try:
-        haiku_items = parse_json_array(call_claude(PRIMARY_MODEL, content))
-        ratio = low_conf_ratio(haiku_items)
+        haiku = parse_result(call_claude(PRIMARY_MODEL, content))
+        ratio = low_conf_ratio(haiku[0])
         if ratio <= LOW_CONF_THRESHOLD:
-            return haiku_items, PRIMARY_MODEL
+            return haiku[0], haiku[1], PRIMARY_MODEL
         print(f"{PRIMARY_MODEL} low-confidence ratio {ratio:.2f} > {LOW_CONF_THRESHOLD}; falling back")
     except Exception as e:
         print(f"Model {PRIMARY_MODEL} failed: {e!r}")
     try:
-        return parse_json_array(call_claude(FALLBACK_MODEL, content)), FALLBACK_MODEL
+        items, tags = parse_result(call_claude(FALLBACK_MODEL, content))
+        return items, tags, FALLBACK_MODEL
     except Exception as e:
         print(f"Model {FALLBACK_MODEL} failed: {e!r}")
-        if haiku_items is not None:
-            return haiku_items, PRIMARY_MODEL
+        if haiku is not None:
+            return haiku[0], haiku[1], PRIMARY_MODEL
         raise
 
 
@@ -125,6 +155,10 @@ def handler(event, context):
         walk_id = msg["walk_id"]
         idx = int(msg["batch_index"])
         total = int(msg["total_batches"])
+        store = msg.get("store", "Other")
+        zip_code = msg.get("zip_code", "00000")
+        metrics = msg.get("frame_metrics", {})
+        meta = {"store": store, "zip_code": zip_code, "frame_metrics": metrics}
         try:
             content = []
             for k in msg["frame_keys"]:
@@ -133,26 +167,37 @@ def handler(event, context):
                     "type": "base64", "media_type": "image/jpeg",
                     "data": base64.b64encode(raw).decode("ascii")}})
             content.append({"type": "text",
-                            "text": "Extract all grocery items and shelf prices from these store frames. Return only the JSON array."})
-            items, model = analyze(content)
+                            "text": "Extract all grocery items and shelf prices from these store frames. Return only the JSON object."})
+            items, unreadable, model = analyze(content)
             s3.put_object(
                 Bucket=bucket,
                 Key=f"extracted-json/{walk_id}/batch_{idx:04d}.json",
-                Body=json.dumps(items).encode(),
+                Body=json.dumps({
+                    "walk_id": walk_id,
+                    "batch_index": idx,
+                    "total_batches": total,
+                    "model": model,
+                    "store": store,
+                    "zip_code": zip_code,
+                    "frame_metrics": metrics,
+                    "items": items,
+                    "unreadable_tags": unreadable,
+                }).encode(),
                 ContentType="application/json",
             )
             put_status(bucket, walk_id, "analyzing_frames",
-                       f"Analyzed batch {idx + 1} of {total} ({len(items)} items, {model}).")
+                       f"Analyzed batch {idx + 1} of {total} ({len(items)} items, {model}).", **meta)
             lam.invoke(
                 FunctionName=MATCHER,
                 InvocationType="Event",
                 Payload=json.dumps({
                     "bucket": bucket, "walk_id": walk_id,
                     "batch_index": idx, "total_batches": total,
+                    "store": store, "zip_code": zip_code,
                 }).encode(),
             )
         except Exception as e:
             print("ERROR", repr(e))
-            put_status(bucket, walk_id, "error", f"Vision analysis failed: {str(e)[:300]}")
+            put_status(bucket, walk_id, "error", f"Vision analysis failed: {str(e)[:300]}", **meta)
             raise
     return {"ok": True}

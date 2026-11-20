@@ -56,3 +56,23 @@ Notes for when this is picked up:
 - **`aldi-*` scoped actions needed:** `sns:*`, `events:*`, `cloudwatch:*`, `logs:*`, `ssm:*`, `codebuild:*`.
 - **Account-wide (`"Resource": "*"`) actions:** `budgets:*`, `ce:GetCostAndUsage` and `ses:SendEmail` cannot be scoped to `aldi-*`.
 - **Recommendation:** create the budget once from an admin session, so `Jon_antigravity` stays read-only on account-wide billing.
+
+## Multi-Store Kroger/Gerbes API & Regional Grocery Catalog Plan
+
+Goal: replace the sample catalog with real, ZIP-specific online prices. Nothing below is implemented yet, and no external scrapers should be built until these items are approved.
+
+- **Catalog file contract (already supported by `catalog_matcher.py`).** The matcher looks up `online-catalog/<store_slug>_<zip>.json`, then `online-catalog/<store_slug>.json`, then `online-catalog/reference.json`, then the built-in sample. Each file is `{"items": [{"name": "...", "price": 0.00, "upc": "..."}]}`. The result records `catalog_source` as `zip_catalog`, `chain_catalog` or `sample_fallback`, so the UI always says whether prices are live or sample.
+- **Kroger family (Kroger, Gerbes, Fred Meyer, Harris Teeter, etc.).**
+  - Use the official Kroger Developer API (OAuth2 client credentials, free tier): Locations API to find the store ID for a ZIP code, then Products API with `filter.locationId` for per-store prices.
+  - A scheduled job (EventBridge Scheduler plus a small `aldi-*` Lambda) would refresh `online-catalog/gerbes_<zip>.json` for ZIP codes seen in `runs_index.json`.
+  - Store the client ID and secret in SSM Parameter Store (`SecureString`), per the Phase 6 secrets plan.
+- **Match by barcode first.** The vision worker now returns `upc_barcode` and `barcode_status`. Add an exact-UPC match before the fuzzy name match, which should raise match quality and cut false positives.
+- **Other chains (Giant, Wegmans, Schnucks, Lidl, Aldi).**
+  - Review each retailer's terms of service and any official API or partner feed first.
+  - Prefer user-supplied or licensed catalogs, or Instacart/retailer feeds, where permitted.
+  - Do not scrape sites that prohibit it.
+- **Freshness and cost.**
+  - Stamp each catalog file with `fetched_at`, and show "prices as of <date>" in the UI.
+  - Refresh only for ZIP codes with recent uploads, and cap the daily API call count.
+  - Keep everything as S3 JSON so there are no new paid services.
+- **UI follow-ups.** Show the catalog source and age on past runs. Let users choose a store/ZIP pair when comparing history.
