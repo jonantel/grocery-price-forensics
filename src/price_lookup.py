@@ -196,31 +196,40 @@ def lookup_kroger(s3, bucket, store_slug, zip_code, item):
                 pass
         if not products:
             term = f"{item.get('brand', '')} {item.get('product_name', '')}".strip()[:60]
-            qs = urllib.parse.urlencode({"filter.term": term, "filter.locationId": loc_id, "filter.limit": 5})
+            qs = urllib.parse.urlencode({"filter.term": term, "filter.locationId": loc_id, "filter.limit": 10})
             res = _http_json(f"https://api.kroger.com/v1/products?{qs}", headers=headers)
             products = res.get("data", [])
         if not products:
             return None
 
-        target = norm(f"{item.get('brand', '')} {item.get('product_name', '')} {item.get('size_text', '')}")
-        best, best_score = None, -1.0
+        target = norm(f"{item.get('brand', '')} {item.get('product_name', '')}")
+        best, best_rank = None, -1.0
         for p in products:
             items_arr = p.get("items") or [{}]
-            price_obj = (items_arr[0] or {}).get("price") or {}
+            first = items_arr[0] or {}
+            price_obj = first.get("price") or {}
             reg = parse_price(price_obj.get("regular"))
             promo = parse_price(price_obj.get("promo"))
             if reg is None and promo is None:
                 continue
+            size_str = first.get("size") or ""
             desc = p.get("description", "")
-            score = 100.0 if (upc and norm_upc(p.get("upc")) == norm_upc(upc)) else fuzz.token_set_ratio(target, norm(desc))
-            if score > best_score and score >= 60:
-                best_score = score
+            full_name = f"{desc} ({size_str})".strip() if size_str and size_str.lower() not in desc.lower() else desc
+            if upc and norm_upc(p.get("upc")) == norm_upc(upc):
+                sim, rank = 100.0, 200.0
+            else:
+                sim = fuzz.token_set_ratio(target, norm(desc))
+                if sim < 62:
+                    continue
+                rank = sim + _size_score_adjustment(item, f"{desc} {size_str}")
+            if rank > best_rank and rank >= 55:
+                best_rank = rank
                 best = {
-                    "name": desc,
+                    "name": full_name,
                     "upc": p.get("upc"),
                     "price": reg if reg is not None else promo,
                     "promo_price": promo if (promo and reg and promo < reg) else None,
-                    "match_score": round(score, 1),
+                    "match_score": round(sim, 1),
                     "source": "kroger_api",
                     "merchant": store_slug.replace("-", " ").title(),
                     "url": f"https://www.kroger.com/p/-/{p.get('upc', '')}" if p.get("upc") else None,
@@ -232,6 +241,42 @@ def lookup_kroger(s3, bucket, store_slug, zip_code, item):
 
 
 # ==================== TIER 2: SERPER GOOGLE SHOPPING + INSTACART SEARCH ====================
+
+def _parse_oz(text):
+    """Best-effort extract fluid/weight ounces from a size string like '16 fl oz' or '30 oz'."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:fl\.?\s*)?oz\b", str(text or "").lower())
+    return float(m.group(1)) if m else None
+
+
+def _size_score_adjustment(item, candidate_text):
+    """Reward close package sizes and penalize >1.6x size mismatches (e.g., 30 oz vs 15 oz)."""
+    want = item.get("size_oz") or _parse_oz(item.get("size_text"))
+    got = _parse_oz(candidate_text)
+    if not want or not got:
+        return 0.0
+    try:
+        ratio = max(float(want), got) / min(float(want), got)
+    except ZeroDivisionError:
+        return 0.0
+    if ratio <= 1.2:
+        return 12.0
+    if ratio <= 1.5:
+        return 0.0
+    return -30.0
+
+
+def _is_lookup_worthy(item):
+    """Don't burn live API calls on items with no shelf price or an unknown brand + vague name."""
+    if parse_price(item.get("in_store_price")) is None:
+        return False
+    brand = norm(item.get("brand"))
+    prod = norm(item.get("product_name"))
+    if not prod:
+        return False
+    if brand in ("", "unknown", "none", "na") and len(prod.split()) < 2:
+        return False
+    return True
+
 
 def _price_plausible(online, in_store):
     if online is None:
@@ -270,10 +315,10 @@ def lookup_serper(store, zip_code, item):
             if sim < 55:
                 continue
             m_norm = norm(merch)
-            # Prefer exact store or Instacart listings over generic third-party merchants.
+            # Prefer exact store or Instacart listings over generic third-party merchants, and respect size.
             bonus = 25 if "instacart" in m_norm else (20 if store_norm and store_norm in m_norm else 0)
-            rank = sim + bonus
-            if rank > best_rank:
+            rank = sim + bonus + _size_score_adjustment(item, title)
+            if rank > best_rank and rank >= 50:
                 best_rank = rank
                 best = {
                     "name": title,
@@ -283,7 +328,7 @@ def lookup_serper(store, zip_code, item):
                     "match_score": round(sim, 1),
                     "source": "instacart_search" if "instacart" in m_norm else "google_shopping",
                     "merchant": merch,
-                    "url": s.get("link"),
+                    "url": s.get("link") or s.get("productUrl"),
                 }
         if best and (best["source"] == "instacart_search" or (store_norm and store_norm in norm(best["merchant"]))):
             return best
@@ -441,18 +486,25 @@ def resolve_prices(s3, bucket, store, store_slug, zip_code, items):
                  "open_prices": ENABLE_OPEN_PRICES,
              }}
 
+    has_live_provider = bool((store_slug in KROGER_BANNERS and KROGER_CLIENT_ID and KROGER_CLIENT_SECRET) or SERPER_API_KEY)
+
     for idx, it in enumerate(items):
+        # Skip unpriced or brand-less vague rows before burning cache/live matches.
+        if not _is_lookup_worthy(it):
+            stats["unmatched"] += 1
+            continue
+
         # Tier 0a: ZIP catalog / 7-day S3 cache
-        m = _match_in_catalog(it, zip_cat, "zip_catalog", now, cutoff=65)
+        m = _match_in_catalog(it, zip_cat, "zip_catalog", now, cutoff=68)
         if m:
             matches[idx] = m
             stats["cache_hits"] += 1
             continue
 
         # Tier 0b: Store-wide chain catalog or uploaded reference.json
-        m = _match_in_catalog(it, chain_cat, "chain_catalog", now, cutoff=65)
+        m = _match_in_catalog(it, chain_cat, "chain_catalog", now, cutoff=68)
         if not m:
-            m = _match_in_catalog(it, ref_cat, "chain_catalog", now, cutoff=60)
+            m = _match_in_catalog(it, ref_cat, "chain_catalog", now, cutoff=65)
         if m:
             matches[idx] = m
             stats["cache_hits"] += 1
@@ -485,14 +537,15 @@ def resolve_prices(s3, bucket, store, store_slug, zip_code, items):
                 })
                 continue
 
-        # Tier 4: Built-in sample fallback
-        m = _match_in_catalog(it, DEFAULT_CATALOG, "sample_fallback", now, cutoff=60)
-        if m:
-            m["merchant"] = "Sample catalog"
-            matches[idx] = m
-            stats["sample_hits"] += 1
-        else:
-            stats["unmatched"] += 1
+        # Tier 4: Built-in Aldi sample fallback ONLY for Aldi when no live provider is configured.
+        if store_slug == "aldi" and not has_live_provider:
+            m = _match_in_catalog(it, DEFAULT_CATALOG, "sample_fallback", now, cutoff=65)
+            if m:
+                m["merchant"] = "Sample catalog"
+                matches[idx] = m
+                stats["sample_hits"] += 1
+                continue
+        stats["unmatched"] += 1
 
     # Persist newly discovered live prices into S3 7-day cache so future scans cost $0.
     if new_cache_entries:
