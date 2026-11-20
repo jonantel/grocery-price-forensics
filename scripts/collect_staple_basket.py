@@ -38,7 +38,11 @@ KROGER_LOCATIONS = [
 ]
 
 BLOCKED_MERCHANTS = ("ebay", "mercari", "poshmark", "etsy", "bonanza", "ubuy", "desertcart", "amazon")
-MULTIPACK_RE = re.compile(r"\b(?:pack of\s*[2-9]|pack of\s*\d{2}|\d+\s*-?\s*pack|case of\s*\d+|bundle|lot of\s*\d+)\b", re.I)
+MULTIPACK_RE = re.compile(
+    r"\b(?:pack of\s*[2-9]|pack of\s*\d{2}|\d+\s*-?\s*pack|case of\s*\d+|bundle|lot of\s*\d+|"
+    r"set of\s*\d+|multi-?pack|variety\s*case|bulk|\(\s*[2-9]\s*ct\s*\)|,\s*[2-9]\s*count)\b",
+    re.I,
+)
 
 
 def norm(s):
@@ -118,8 +122,16 @@ def resolve_kroger_locations(token):
                 chosen = c
                 break
         addr = chosen.get("address") or {}
+        chain_name = (chosen.get("chain") or cfg["store"]).title()
+        if chain_name.upper() == "QFC":
+            chain_name = "QFC"
+        elif chain_name.upper() == "HART":
+            chain_name = "Harris Teeter"
+        domain = "www.qfc.com" if chain_name == "QFC" else cfg["domain"]
         resolved.append({
             **cfg,
+            "store": chain_name,
+            "domain": domain,
             "locationId": chosen["locationId"],
             "chain": chosen.get("chain"),
             "store_name": chosen.get("name"),
@@ -330,6 +342,15 @@ def main():
 
     for b in basket:
         pmap = prices_by_id[b["id"]]
+        # Drop Serper Shopping bulk/case outliers whose price is >2.2x or <0.45x the Kroger median.
+        k_prices = sorted(pv["price"] for sk, pv in pmap.items() if pv.get("source") == "kroger_api" and pv.get("price"))
+        if k_prices:
+            med = k_prices[len(k_prices) // 2]
+            pmap = {
+                sk: pv for sk, pv in pmap.items()
+                if pv.get("source") == "kroger_api" or (0.45 * med <= (pv.get("price") or 0) <= 2.20 * med)
+            }
+            prices_by_id[b["id"]] = pmap
         for sk, pv in pmap.items():
             if sk not in store_meta:
                 store_meta[sk] = {"key": sk, "store": pv["store"], "store_name": pv["store_name"],
