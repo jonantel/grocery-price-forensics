@@ -191,25 +191,64 @@ const PAGE = `<!doctype html>
 <body class="bg-[#FAFAF9] text-stone-800 min-h-screen" x-data="app()" x-init="init()" x-cloak>
 <div class="max-w-5xl mx-auto px-4 py-6 sm:py-10 space-y-6">
 
-  <header class="text-center space-y-1">
+  <header class="text-center space-y-1.5">
     <div class="text-4xl">&#128722;</div>
     <h1 class="text-2xl sm:text-3xl font-bold text-[#15803D]">Grocery Price Forensics</h1>
-    <p class="text-stone-500 text-sm sm:text-base">Film a quick walk down the aisle and see how in-store prices compare with online prices.</p>
+    <p class="text-stone-600 text-sm sm:text-base max-w-2xl mx-auto">
+      Compare real in-store shelf prices against online and delivery prices, verify every match with direct product links, and track how prices vary across stores and ZIP codes.
+    </p>
   </header>
+
+  <!-- Purpose & Instructions -->
+  <section class="bg-white rounded-2xl border border-stone-200 shadow-sm">
+    <button type="button" @click="helpOpen = !helpOpen" class="w-full flex items-center justify-between gap-3 px-5 py-3.5 text-left">
+      <span class="font-semibold text-sm sm:text-base text-stone-700">&#128214; How this works &amp; tips for accurate price matches</span>
+      <span class="text-xs font-medium text-[#15803D]" x-text="helpOpen ? 'Hide' : 'Show guide'"></span>
+    </button>
+    <div x-show="helpOpen" class="px-5 pb-5 pt-2 border-t border-stone-100 text-sm text-stone-600 space-y-3">
+      <p>
+        <strong>Why we built this:</strong> Online grocery apps often add quiet markups over shelf prices, and chains frequently charge different prices from one ZIP code to the next. Upload a short aisle video to build transparent, link-verified price comparisons over time.
+      </p>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+        <div class="rounded-xl bg-stone-50 border border-stone-200 p-3">
+          <div class="font-semibold text-stone-800">1. Pick store &amp; ZIP</div>
+          <p class="text-xs text-stone-500 mt-1">Your 5-digit ZIP resolves the exact neighborhood store for live API pricing and tracks location-to-location differences.</p>
+        </div>
+        <div class="rounded-xl bg-stone-50 border border-stone-200 p-3">
+          <div class="font-semibold text-stone-800">2. Film shelf tags steadily</div>
+          <p class="text-xs text-stone-500 mt-1">Keep clips 5&ndash;20 seconds. Pause ~1 second on each tag so brand, package size (oz/ct), price, and barcode stay sharp.</p>
+        </div>
+        <div class="rounded-xl bg-stone-50 border border-stone-200 p-3">
+          <div class="font-semibold text-stone-800">3. Verify every match</div>
+          <p class="text-xs text-stone-500 mt-1">Every online price includes a direct product link, exact matched title, size check, and a badge showing whether it came from the same store or another retailer.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- Upload -->
   <section class="bg-white rounded-2xl border border-stone-200 shadow-sm p-5 sm:p-6 space-y-4">
     <h2 class="text-lg font-semibold">Check a new store visit</h2>
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <label class="block">
-        <span class="text-sm text-stone-600">Which store?</span>
-        <select x-model="store" class="mt-1 w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#15803D]">
-          <template x-for="s in stores" :key="s"><option :value="s" x-text="s"></option></template>
-        </select>
-      </label>
+      <div class="space-y-2">
+        <label class="block">
+          <span class="text-sm text-stone-600">Which store?</span>
+          <select x-model="store" class="mt-1 w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#15803D]">
+            <optgroup label="Live Store-Exact Prices (Kroger Family)">
+              <template x-for="s in krogerStores" :key="s"><option :value="s" x-text="s"></option></template>
+            </optgroup>
+            <optgroup label="Major National &amp; Regional Chains">
+              <template x-for="s in otherStores" :key="s"><option :value="s" x-text="s"></option></template>
+            </optgroup>
+            <option value="Other">Other (type store name)</option>
+          </select>
+        </label>
+        <input x-show="store === 'Other'" x-model="customStore" type="text" maxlength="30" placeholder="Enter store name (e.g. Moser's, Woodman's)"
+          class="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#15803D]">
+      </div>
       <label class="block">
         <span class="text-sm text-stone-600">ZIP code</span>
-        <input x-model="zip" inputmode="numeric" maxlength="5" placeholder="e.g. 20176"
+        <input x-model="zip" inputmode="numeric" maxlength="5" placeholder="e.g. 65203 or 20176"
           class="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#15803D]">
       </label>
     </div>
@@ -272,7 +311,8 @@ const PAGE = `<!doctype html>
           <div class="bg-white rounded-2xl border border-stone-200 p-5">
             <div class="text-sm text-stone-500">Items found</div>
             <div class="text-4xl font-bold mt-1" x-text="items().length"></div>
-            <div class="text-xs text-stone-400 mt-1" x-text="(run.store || 'Store') + (run.zip_code && run.zip_code !== '00000' ? ' \\u00B7 ZIP ' + run.zip_code : '')"></div>
+            <div class="text-xs text-stone-500 mt-1 font-medium" x-text="(run.resolved_store && run.resolved_store.name) || ((run.store || 'Store') + (run.zip_code && run.zip_code !== '00000' ? ' \\u00B7 ZIP ' + run.zip_code : ''))"></div>
+            <div class="text-xs text-stone-400" x-show="run.resolved_store && run.resolved_store.address" x-text="run.resolved_store && run.resolved_store.address"></div>
           </div>
           <div class="bg-white rounded-2xl border border-stone-200 p-5">
             <div class="text-sm text-stone-500">Average savings in-store</div>
@@ -341,16 +381,28 @@ const PAGE = `<!doctype html>
                   <tr class="border-b border-stone-100 hover:bg-stone-50">
                     <td class="py-3 pr-4">
                       <div class="font-medium" x-text="name(r)"></div>
-                      <div class="text-xs text-stone-400" x-show="r.upc_barcode" x-text="'Barcode ' + r.upc_barcode"></div>
-                      <div class="text-xs text-stone-400" x-show="!r.matched_catalog_item">No online match found</div>
+                      <div class="text-xs text-stone-400" x-show="r.upc_barcode" x-text="'UPC ' + r.upc_barcode"></div>
+                      <div class="text-xs text-stone-500 mt-0.5" x-show="r.matched_catalog_item">
+                        <span x-text="'Matched: ' + r.matched_catalog_item"></span>
+                        <span class="text-stone-400" x-show="r.match_score" x-text="' (' + Math.round(r.match_score) + '%)'"></span>
+                      </div>
+                      <div class="flex flex-wrap gap-1 mt-1" x-show="r.matched_catalog_item">
+                        <span x-show="r.store_match === 'exact_store'" class="rounded-full bg-green-100 text-green-800 px-2 py-0.5 text-[11px] font-medium">Same store</span>
+                        <span x-show="r.store_match === 'instacart_store'" class="rounded-full bg-sky-100 text-sky-800 px-2 py-0.5 text-[11px] font-medium">Instacart</span>
+                        <span x-show="r.store_match === 'other_retailer'" class="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[11px] font-medium">Different retailer</span>
+                        <span x-show="r.size_verified === false" class="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[11px] font-medium">Check size</span>
+                      </div>
+                      <div class="text-xs text-stone-400" x-show="!r.matched_catalog_item">No verified online match yet</div>
                     </td>
-                    <td class="py-3 pr-4 whitespace-nowrap" x-text="r.size_text"></td>
+                    <td class="py-3 pr-4 whitespace-nowrap" x-text="r.size_text || '-'"></td>
                     <td class="py-3 pr-4 whitespace-nowrap" x-text="money(r.in_store_price)"></td>
                     <td class="py-3 pr-4 whitespace-nowrap">
-                      <div x-text="money(r.online_price)"></div>
+                      <div class="font-medium" x-text="money(r.online_price)"></div>
+                      <div class="text-xs text-emerald-700 font-medium" x-show="r.promo_price" x-text="'Sale ' + money(r.promo_price)"></div>
                       <template x-if="r.online_url">
                         <a :href="r.online_url" target="_blank" rel="noopener noreferrer"
-                          class="text-xs text-[#15803D] underline hover:text-green-900" x-text="r.online_merchant || 'View online'"></a>
+                          class="text-xs text-[#15803D] underline hover:text-green-900 inline-flex items-center gap-0.5"
+                          x-text="(r.online_merchant || 'View product') + ' \\u2197'"></a>
                       </template>
                       <div x-show="!r.online_url && r.online_merchant" class="text-xs text-stone-400" x-text="r.online_merchant"></div>
                     </td>
@@ -396,7 +448,13 @@ const PAGE = `<!doctype html>
       <details class="bg-white rounded-2xl border border-stone-200 p-4 sm:p-5">
         <summary class="cursor-pointer list-none flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <div class="font-semibold capitalize" x-text="p.name"></div>
+            <div class="font-semibold capitalize flex flex-wrap items-center gap-2">
+              <span x-text="p.name"></span>
+              <span x-show="p.locations > 1 && p.spread > 0" class="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-medium"
+                x-text="p.locations + ' locations \\u00B7 ' + money(p.spread) + ' spread'"></span>
+              <span x-show="p.locations > 1 && p.spread === 0" class="rounded-full bg-green-100 text-green-800 px-2 py-0.5 text-xs font-medium"
+                x-text="p.locations + ' locations \\u00B7 same price'"></span>
+            </div>
             <div class="text-sm text-stone-500" x-text="p.points.length + ' recorded price' + (p.points.length === 1 ? '' : 's') + ' \\u00B7 low ' + money(p.min) + ' \\u00B7 high ' + money(p.max)"></div>
           </div>
           <svg width="120" height="30" viewBox="0 0 120 30" class="shrink-0">
@@ -432,8 +490,9 @@ const PAGE = `<!doctype html>
 <script>
 function app() {
   return {
-    stores: ['Aldi', 'Giant', 'Wegmans', 'Schnucks', 'Gerbes', 'Kroger', 'Lidl', 'Target', 'Walmart', 'Other'],
-    store: 'Aldi', zip: '', file: null, drag: false,
+    krogerStores: ['Gerbes', 'Kroger', 'Harris Teeter', 'Dillons', 'Ralphs', 'Fred Meyer', 'King Soopers', "Fry's", "Smith's", "Mariano's", 'QFC', "Pick 'n Save", 'Metro Market', 'City Market', 'Ruler Foods'],
+    otherStores: ['Aldi', 'Walmart', 'Target', 'Costco', "Sam's Club", 'Whole Foods', "Trader Joe's", 'Hy-Vee', 'Schnucks', 'Giant', 'Wegmans', 'Lidl', 'Safeway', 'Publix', 'H-E-B', 'Meijer', 'Food Lion', 'Sprouts', 'ShopRite', 'WinCo'],
+    store: 'Gerbes', customStore: '', zip: '', file: null, drag: false, helpOpen: false,
     uploading: false, progress: 0, uploadError: '',
     status: { stage: 'idle' },
     tab: 'latest',
@@ -529,7 +588,10 @@ function app() {
         if (q && (p.product_name || key).toLowerCase().indexOf(q) < 0) continue;
         const pts = (p.points || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
         const vals = pts.map(x => x.in_store_price).filter(v => v != null);
-        out.push({ key: key, name: p.product_name || key, points: pts, min: vals.length ? Math.min.apply(null, vals) : null, max: vals.length ? Math.max.apply(null, vals) : null });
+        const locs = new Set(pts.map(x => (x.store || '') + '|' + (x.zip_code || ''))).size;
+        const min = vals.length ? Math.min.apply(null, vals) : null;
+        const max = vals.length ? Math.max.apply(null, vals) : null;
+        out.push({ key: key, name: p.product_name || key, points: pts, min: min, max: max, locations: locs, spread: (min != null && max != null) ? Math.round((max - min) * 100) / 100 : 0 });
       }
       out.sort((a, b) => b.points.length - a.points.length || a.name.localeCompare(b.name));
       return out.slice(0, 40);
@@ -590,9 +652,10 @@ function app() {
       this.uploadError = ''; this.uploading = true; this.progress = 0;
       try {
         const ext = /\\.mov$/i.test(this.file.name) ? 'mov' : 'mp4';
+        const chosenStore = this.store === 'Other' ? ((this.customStore || '').trim() || 'Other') : this.store;
         const res = await fetch('/grocery/presign', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ store: this.store, zip: zip || '00000', ext: ext })
+          body: JSON.stringify({ store: chosenStore, zip: zip || '00000', ext: ext })
         });
         const pre = await res.json();
         if (!pre.url) throw new Error(pre.error || 'Could not start the upload');

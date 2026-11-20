@@ -97,7 +97,7 @@ def handler(event, context):
 
         items_list = list(seen.values())
         store_slug = slugify(store)
-        matches, catalog_source, catalog_file, lookup_stats = price_lookup.resolve_prices(
+        matches, catalog_source, catalog_file, lookup_stats, resolved_store = price_lookup.resolve_prices(
             s3, bucket, store, store_slug, zip_code, items_list
         )
 
@@ -120,11 +120,13 @@ def handler(event, context):
                 "barcode_status": it.get("barcode_status") or ("read" if it.get("upc_barcode") else "not_visible"),
                 "matched_catalog_item": None,
                 "match_score": None,
+                "size_verified": None,
                 "online_price": None,
                 "promo_price": None,
                 "dollar_markup": None,
                 "pct_markup": None,
                 "price_source": None,
+                "store_match": None,
                 "online_merchant": None,
                 "online_url": None,
             }
@@ -133,9 +135,11 @@ def handler(event, context):
                 online = to_float(m["price"])
                 row["matched_catalog_item"] = m.get("name")
                 row["match_score"] = m.get("match_score")
+                row["size_verified"] = m.get("size_verified")
                 row["online_price"] = online
                 row["promo_price"] = to_float(m.get("promo_price"))
                 row["price_source"] = m.get("source")
+                row["store_match"] = m.get("store_match")
                 row["online_merchant"] = m.get("merchant")
                 row["online_url"] = m.get("url")
                 if store_price and online is not None:
@@ -171,6 +175,7 @@ def handler(event, context):
             "generated_at": now.isoformat(),
             "store": store,
             "zip_code": zip_code,
+            "resolved_store": resolved_store,
             "catalog_source": catalog_source,
             "catalog_file": catalog_file,
             "lookup_stats": lookup_stats,
