@@ -1,0 +1,11 @@
+.env
+*.env
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*credentials*
+*.mp4
+build.log
+node_modules/
+.wrangler/

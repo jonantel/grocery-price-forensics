@@ -1,0 +1,15 @@
+name = "grocery-price-forensics"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+workers_dev = false
+
+routes = [
+  { pattern = "discourseforensics.com/grocery*", zone_name = "discourseforensics.com" }
+]
+
+[vars]
+S3_BUCKET = "aldi-price-forensics-575554646331"
+AWS_REGION = "us-east-1"
+
+# Secrets (set with `wrangler secret put`):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
