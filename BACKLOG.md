@@ -76,3 +76,17 @@ Goal: replace the sample catalog with real, ZIP-specific online prices. Nothing 
   - Refresh only for ZIP codes with recent uploads, and cap the daily API call count.
   - Keep everything as S3 JSON so there are no new paid services.
 - **UI follow-ups.** Show the catalog source and age on past runs. Let users choose a store/ZIP pair when comparing history.
+
+## Phase 7 Backlog: Cross-Store Price Comparison ("Who's Actually Cheapest?")
+
+Goal: compare identical items and standardized grocery baskets directly across competing stores in the same ZIP/metro (e.g., Aldi vs. Gerbes vs. Schnucks vs. Giant vs. Wegmans vs. Walmart) to test "lowest price" claims with real evidence.
+
+- **Apples-to-Apples Unit Price Normalization:**
+  - Use `canonical_commodity` (e.g., `whole milk`, `large eggs`, `potato chips`) and `size_oz` / `unit_count` (already extracted by `vision_worker.py`) to compute standardized unit prices (`$/oz`, `$/lb`, `$/ct`) across different package sizes and private labels (e.g., Aldi *Friendly Farms* vs. Gerbes *Kroger* brand vs. national brands).
+- **Store-vs-Store Basket Index & Leaderboard Tab:**
+  - Define a standard staple basket (milk, eggs, bread, chicken breast, bananas, butter, cheese, pasta, spinach, potatoes, etc.) and rank stores in a ZIP/region by total basket cost and per-item winner.
+  - Show side-by-side store matrix in the UI (`Compare Stores` tab) with date freshness badges so stale prices are clearly marked.
+- **Direct Website Price Capture (Low-Cost & ToS-Safe Options):**
+  - **Primary (Live Now):** Official free APIs (Kroger Developer API for Gerbes/Kroger, registered under `info@discourseforensics.com`) + Serper Google Shopping / Instacart search (registered under `info@discourseforensics.com`), cached 7 days in S3.
+  - **Direct Browser Capture (Human-in-the-Loop):** Lightweight Chrome bookmarklet / extension that lets the user export visible prices from their own logged-in grocery or Instacart tab directly into `online-catalog/<store>_<zip>.json` ($0 hosting, avoids datacenter VM costs and anti-bot blocks).
+  - **Avoid 24/7 Cloud VMs for Scraping:** Always-on EC2/browser VMs break the ~$0 budget ($10–$30+/mo) and hit datacenter IP / anti-bot walls (Cloudflare Turnstile, PerimeterX, DataDome) on major grocery sites. Only evaluate on-demand/official feeds if a retailer provides a public endpoint.
