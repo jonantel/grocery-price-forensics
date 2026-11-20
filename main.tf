@@ -97,6 +97,28 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
   }
 
   rule {
+    id     = "expire-raw-receipts"
+    status = "Enabled"
+    filter {
+      prefix = "raw-receipts/"
+    }
+    expiration {
+      days = 2
+    }
+  }
+
+  rule {
+    id     = "expire-evidence-crops"
+    status = "Enabled"
+    filter {
+      prefix = "public/evidence/"
+    }
+    expiration {
+      days = 60
+    }
+  }
+
+  rule {
     id     = "expire-frames"
     status = "Enabled"
     filter {
@@ -287,6 +309,12 @@ resource "aws_s3_bucket_notification" "raw_videos" {
     lambda_function_arn = aws_lambda_function.frame_extractor.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "raw-videos/"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.frame_extractor.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "raw-receipts/"
   }
 
   depends_on = [aws_lambda_permission.s3_invoke]

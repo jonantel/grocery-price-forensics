@@ -14,11 +14,15 @@ QUEUE_URL = os.environ.get("VISION_QUEUE_URL", "")
 SHARPNESS_MIN = 20.0
 CANDIDATES_PER_SEC = 4
 MAX_WIDTH = 1280
+RECEIPT_MAX_WIDTH = 1600
 BATCH_SIZE = 8
 MAX_FRAMES_PER_VIDEO = int(os.environ.get("MAX_FRAMES_PER_VIDEO", "24"))
 DUP_DIFF_THRESHOLD = float(os.environ.get("DUP_DIFF_THRESHOLD", "4.5"))
 
-# Upload keys look like raw-videos/walk_<timestamp>_<store_slug>_<zip>.mp4
+VIDEO_EXTS = (".mp4", ".mov")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+# Upload keys look like raw-videos/walk_<ts>_<store_slug>_<zip>.mp4 or raw-receipts/receipt_<ts>_<store_slug>_<zip>.jpg
 KEY_RE = re.compile(r"^(?P<rest>.+)_(?P<slug>[a-z0-9-]+)_(?P<zip>\d{5})$")
 
 
@@ -49,6 +53,28 @@ def put_status(bucket, walk_id, stage, message, **extra):
 
 def _thumb(gray):
     return cv2.resize(gray, (32, 18), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
+def prepare_receipt(path):
+    """Load and resize a checkout receipt photo while keeping small line-item text crisp."""
+    img = cv2.imread(path)
+    if img is None:
+        raise ValueError("Could not decode receipt image.")
+    h, w = img.shape[:2]
+    if w > RECEIPT_MAX_WIDTH:
+        scale = RECEIPT_MAX_WIDTH / w
+        img = cv2.resize(img, (RECEIPT_MAX_WIDTH, int(h * scale)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not ok:
+        raise ValueError("Could not encode receipt JPEG.")
+    metrics = {
+        "total_seconds": 1,
+        "kept_frames": 1,
+        "dropped_blurry_frames": 0,
+        "skipped_duplicate_frames": 0,
+        "capped_frames": 0,
+    }
+    return buf.tobytes(), metrics
 
 
 def extract_frames(path):
@@ -98,7 +124,6 @@ def extract_frames(path):
 
     cap.release()
 
-    # Enforce hard per-video frame cap by uniformly sampling across distinct frames.
     capped_frames = 0
     if len(candidates) > MAX_FRAMES_PER_VIDEO:
         capped_frames = len(candidates) - MAX_FRAMES_PER_VIDEO
@@ -129,50 +154,82 @@ def handler(event, context):
     for rec in event.get("Records", []):
         bucket = rec["s3"]["bucket"]["name"]
         key = urllib.parse.unquote_plus(rec["s3"]["object"]["key"])
-        if not key.startswith("raw-videos/") or not key.lower().endswith((".mp4", ".mov")):
+        low = key.lower()
+        is_receipt = key.startswith("raw-receipts/") and low.endswith(IMAGE_EXTS)
+        is_video = key.startswith("raw-videos/") and low.endswith(VIDEO_EXTS)
+        if not (is_receipt or is_video):
             continue
+
         walk_id, slug, zip_code = parse_key(key)
         store = store_display(slug)
-        meta = {"store": store, "zip_code": zip_code}
+        scan_type = "receipt" if is_receipt else "video"
+        meta = {"store": store, "zip_code": zip_code, "scan_type": scan_type}
         local = "/tmp/" + os.path.basename(key)
         try:
-            put_status(bucket, walk_id, "slicing_frames", "Extracting sharp frames from video...", **meta)
-            s3.download_file(bucket, key, local)
-            frames, metrics = extract_frames(local)
-            if not frames:
-                put_status(bucket, walk_id, "error", "No sharp frames found in video.",
-                           frame_metrics=metrics, **meta)
-                continue
-            keys = []
-            for sec, data in frames:
-                fkey = f"frames/{walk_id}/sec_{sec:04d}.jpg"
-                s3.put_object(Bucket=bucket, Key=fkey, Body=data, ContentType="image/jpeg")
-                keys.append(fkey)
-            batches = [keys[i:i + BATCH_SIZE] for i in range(0, len(keys), BATCH_SIZE)]
-            for idx, batch in enumerate(batches):
+            if is_receipt:
+                put_status(bucket, walk_id, "slicing_frames", "Preparing receipt photo...", **meta)
+                s3.download_file(bucket, key, local)
+                jpeg_bytes, metrics = prepare_receipt(local)
+                fkey = f"frames/{walk_id}/receipt_0000.jpg"
+                s3.put_object(Bucket=bucket, Key=fkey, Body=jpeg_bytes, ContentType="image/jpeg")
+                # Also store full receipt image under 60-day evidence prefix for auditability.
+                s3.put_object(Bucket=bucket, Key=f"public/evidence/{walk_id}/receipt.jpg",
+                              Body=jpeg_bytes, ContentType="image/jpeg", CacheControl="public, max-age=86400")
                 sqs.send_message(
                     QueueUrl=QUEUE_URL,
                     MessageBody=json.dumps({
                         "bucket": bucket,
                         "walk_id": walk_id,
+                        "scan_type": "receipt",
                         "store": store,
                         "zip_code": zip_code,
                         "frame_metrics": metrics,
-                        "batch_index": idx,
-                        "total_batches": len(batches),
-                        "frame_keys": batch,
+                        "batch_index": 0,
+                        "total_batches": 1,
+                        "frame_keys": [fkey],
                     }),
                 )
-            put_status(
-                bucket, walk_id, "analyzing_frames",
-                f"Kept {metrics['kept_frames']} unique sharp frame(s) from {metrics['total_seconds']}s "
-                f"({metrics['dropped_blurry_frames']} blurry, {metrics['skipped_duplicate_frames']} duplicate); "
-                f"sent {len(batches)} batch(es) for analysis...",
-                frame_metrics=metrics, **meta,
-            )
+                put_status(bucket, walk_id, "analyzing_frames",
+                           "Reading line items from receipt photo...", frame_metrics=metrics, **meta)
+            else:
+                put_status(bucket, walk_id, "slicing_frames", "Extracting sharp frames from video...", **meta)
+                s3.download_file(bucket, key, local)
+                frames, metrics = extract_frames(local)
+                if not frames:
+                    put_status(bucket, walk_id, "error", "No sharp frames found in video.",
+                               frame_metrics=metrics, **meta)
+                    continue
+                keys = []
+                for sec, data in frames:
+                    fkey = f"frames/{walk_id}/sec_{sec:04d}.jpg"
+                    s3.put_object(Bucket=bucket, Key=fkey, Body=data, ContentType="image/jpeg")
+                    keys.append(fkey)
+                batches = [keys[i:i + BATCH_SIZE] for i in range(0, len(keys), BATCH_SIZE)]
+                for idx, batch in enumerate(batches):
+                    sqs.send_message(
+                        QueueUrl=QUEUE_URL,
+                        MessageBody=json.dumps({
+                            "bucket": bucket,
+                            "walk_id": walk_id,
+                            "scan_type": "video",
+                            "store": store,
+                            "zip_code": zip_code,
+                            "frame_metrics": metrics,
+                            "batch_index": idx,
+                            "total_batches": len(batches),
+                            "frame_keys": batch,
+                        }),
+                    )
+                put_status(
+                    bucket, walk_id, "analyzing_frames",
+                    f"Kept {metrics['kept_frames']} unique sharp frame(s) from {metrics['total_seconds']}s "
+                    f"({metrics['dropped_blurry_frames']} blurry, {metrics['skipped_duplicate_frames']} duplicate); "
+                    f"sent {len(batches)} batch(es) for analysis...",
+                    frame_metrics=metrics, **meta,
+                )
         except Exception as e:
             print("ERROR", repr(e))
-            put_status(bucket, walk_id, "error", f"Frame extraction failed: {e}", **meta)
+            put_status(bucket, walk_id, "error", f"Extraction failed: {e}", **meta)
             raise
         finally:
             if os.path.exists(local):

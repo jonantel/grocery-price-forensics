@@ -69,21 +69,25 @@ def handler(event, context):
     total = int(event.get("total_batches", 1))
     store = event.get("store", "Other")
     zip_code = event.get("zip_code", "00000")
+    scan_type = event.get("scan_type", "video")
     try:
         keys = list_batches(bucket, walk_id)
         if len(keys) < total:
             print(f"{len(keys)}/{total} batches ready; waiting")
             return {"waiting": True}
 
-        put_status(bucket, walk_id, "matching", "Comparing with online prices...", store=store, zip_code=zip_code)
+        put_status(bucket, walk_id, "matching", "Comparing with online prices...",
+                   store=store, zip_code=zip_code, scan_type=scan_type)
 
-        seen, unreadable, frame_metrics = {}, [], {}
+        seen, unreadable, frame_metrics, receipt_meta = {}, [], {}, {}
         for k in keys:
             batch = json.loads(s3.get_object(Bucket=bucket, Key=k)["Body"].read())
-            if isinstance(batch, list):  # legacy batch format
+            if isinstance(batch, list):
                 batch = {"items": batch}
             store = batch.get("store", store)
             zip_code = batch.get("zip_code", zip_code)
+            scan_type = batch.get("scan_type", scan_type)
+            receipt_meta = receipt_meta or batch.get("receipt_meta") or {}
             frame_metrics = frame_metrics or batch.get("frame_metrics", {})
             for t in batch.get("unreadable_tags", []):
                 if t not in unreadable:
@@ -104,12 +108,15 @@ def handler(event, context):
         rows = []
         for idx, it in enumerate(items_list):
             store_price = to_float(it.get("in_store_price"))
+            ev_file = it.get("evidence_file")
             row = {
                 "walk_id": walk_id,
                 "store": store,
                 "zip_code": zip_code,
+                "scan_type": scan_type,
                 "brand": it.get("brand"),
                 "product_name": it.get("product_name"),
+                "receipt_raw_text": it.get("receipt_raw_text"),
                 "size_text": it.get("size_text"),
                 "size_oz": to_float(it.get("size_oz")),
                 "in_store_price": store_price,
@@ -118,6 +125,10 @@ def handler(event, context):
                 "confidence": it.get("confidence"),
                 "upc_barcode": it.get("upc_barcode"),
                 "barcode_status": it.get("barcode_status") or ("read" if it.get("upc_barcode") else "not_visible"),
+                "evidence_url": f"/grocery/evidence/{walk_id}/{ev_file}" if ev_file else None,
+                "human_verified": False,
+                "flagged_wrong": False,
+                "human_note": "",
                 "matched_catalog_item": None,
                 "match_score": None,
                 "size_verified": None,
@@ -151,6 +162,7 @@ def handler(event, context):
         summary = {
             "total_items": len(rows),
             "matched_items": len(matched),
+            "verified_items": 0,
             "avg_pct_markup": round(sum(r["pct_markup"] for r in matched) / len(matched), 1) if matched else 0.0,
             "total_basket_savings": round(sum(r["dollar_markup"] for r in matched), 2),
         }
@@ -171,6 +183,9 @@ def handler(event, context):
         now = datetime.now(timezone.utc)
         run = {
             "walk_id": walk_id,
+            "scan_type": scan_type,
+            "receipt_meta": receipt_meta or None,
+            "receipt_image_url": f"/grocery/evidence/{walk_id}/receipt.jpg" if scan_type == "receipt" else None,
             "timestamp": now.isoformat(),
             "generated_at": now.isoformat(),
             "store": store,
@@ -192,6 +207,7 @@ def handler(event, context):
         runs = [r for r in index.get("runs", []) if r.get("walk_id") != walk_id]
         runs.insert(0, {
             "walk_id": walk_id,
+            "scan_type": scan_type,
             "timestamp": now.isoformat(),
             "store": store,
             "zip_code": zip_code,
@@ -216,9 +232,11 @@ def handler(event, context):
                 "date": now.strftime("%Y-%m-%d"),
                 "store": store,
                 "zip_code": zip_code,
+                "scan_type": scan_type,
                 "in_store_price": r["in_store_price"],
                 "online_price": r["online_price"],
                 "price_source": r["price_source"],
+                "human_verified": False,
                 "walk_id": walk_id,
             })
             entry["points"] = pts[-MAX_POINTS_PER_PRODUCT:]
@@ -237,9 +255,9 @@ def handler(event, context):
                           Body=buf.getvalue())
 
         put_status(bucket, walk_id, "complete", f"Done: {len(rows)} items, {len(matched)} matched.",
-                   store=store, zip_code=zip_code, catalog_source=catalog_source, run_usd=cost["run_usd"])
+                   store=store, zip_code=zip_code, scan_type=scan_type, catalog_source=catalog_source, run_usd=cost["run_usd"])
         return {"ok": True, "items": len(rows)}
     except Exception as e:
         print("ERROR", repr(e))
-        put_status(bucket, walk_id, "error", f"Matching failed: {e}", store=store, zip_code=zip_code)
+        put_status(bucket, walk_id, "error", f"Matching failed: {e}", store=store, zip_code=zip_code, scan_type=scan_type)
         raise
