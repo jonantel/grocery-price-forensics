@@ -165,6 +165,9 @@ export default {
       if (path === "/grocery/history" && request.method === "GET") {
         return proxyJson(env, "public/price_history.json", { products: {} });
       }
+      if (path === "/grocery/cost" && request.method === "GET") {
+        return proxyJson(env, "public/cost_summary.json", { monthly_usd: 0, max_monthly_usd: 5 });
+      }
       return json({ error: "not_found" }, 404);
     } catch (e) {
       return json({ error: String((e && e.message) || e) }, 500);
@@ -295,6 +298,8 @@ const PAGE = `<!doctype html>
           <div x-show="qOpen" class="px-5 pb-5 text-sm text-stone-600 space-y-3 border-t border-stone-100 pt-4">
             <p x-text="quality().frames"></p>
             <p x-text="quality().barcodes"></p>
+            <p x-show="run.cost" class="text-xs text-stone-500"
+              x-text="'Scan AI cost: $' + Number((run.cost && run.cost.run_usd) || 0).toFixed(4) + ' \\u00B7 Monthly spend: $' + Number((run.cost && run.cost.monthly_usd) || 0).toFixed(4) + ' / $' + Number((run.cost && run.cost.max_monthly_usd) || 5).toFixed(2)"></p>
             <div x-show="(sq().unreadable_tags || []).length">
               <div class="font-semibold text-stone-700 mb-1">Tags we couldn't read</div>
               <ul class="list-disc pl-5 space-y-0.5">
@@ -341,7 +346,14 @@ const PAGE = `<!doctype html>
                     </td>
                     <td class="py-3 pr-4 whitespace-nowrap" x-text="r.size_text"></td>
                     <td class="py-3 pr-4 whitespace-nowrap" x-text="money(r.in_store_price)"></td>
-                    <td class="py-3 pr-4 whitespace-nowrap" x-text="money(r.online_price)"></td>
+                    <td class="py-3 pr-4 whitespace-nowrap">
+                      <div x-text="money(r.online_price)"></div>
+                      <template x-if="r.online_url">
+                        <a :href="r.online_url" target="_blank" rel="noopener noreferrer"
+                          class="text-xs text-[#15803D] underline hover:text-green-900" x-text="r.online_merchant || 'View online'"></a>
+                      </template>
+                      <div x-show="!r.online_url && r.online_merchant" class="text-xs text-stone-400" x-text="r.online_merchant"></div>
+                    </td>
                     <td class="py-3 pr-4 whitespace-nowrap font-semibold text-[#15803D]" x-text="r.dollar_markup == null ? '-' : money(r.dollar_markup)"></td>
                     <td class="py-3 pr-4 whitespace-nowrap" x-text="r.pct_markup == null ? '-' : r.pct_markup.toFixed(1) + '%'"></td>
                   </tr>
@@ -420,7 +432,7 @@ const PAGE = `<!doctype html>
 <script>
 function app() {
   return {
-    stores: ['Aldi', 'Giant', 'Wegmans', 'Schnucks', 'Gerbes', 'Lidl', 'Other'],
+    stores: ['Aldi', 'Giant', 'Wegmans', 'Schnucks', 'Gerbes', 'Kroger', 'Lidl', 'Target', 'Walmart', 'Other'],
     store: 'Aldi', zip: '', file: null, drag: false,
     uploading: false, progress: 0, uploadError: '',
     status: { stage: 'idle' },
@@ -461,9 +473,11 @@ function app() {
       return ({ blur: 'Too blurry to read', glare: 'Glare on the tag', cut_off: 'Tag was cut off', barcode_unreadable: "Barcode couldn't be read" })[r] || 'Hard to read';
     },
     sourceOf(s) {
-      if (s === 'zip_catalog') return { label: 'ZIP code catalog', cls: 'bg-green-100 text-green-800', hint: 'Online prices for your area.' };
+      if (s === 'live_api') return { label: 'Live online prices', cls: 'bg-green-100 text-green-800', hint: 'Matched live online & cached for 7 days.' };
+      if (s === 'zip_catalog') return { label: 'ZIP code catalog', cls: 'bg-green-100 text-green-800', hint: 'Online prices cached for your area.' };
       if (s === 'chain_catalog') return { label: 'Store-wide catalog', cls: 'bg-sky-100 text-sky-800', hint: 'Typical online prices for this store, not specific to your ZIP.' };
-      if (s === 'sample_fallback') return { label: 'Sample catalog', cls: 'bg-amber-100 text-amber-800', hint: 'Example prices only \\u2014 not live online prices.' };
+      if (s === 'mixed') return { label: 'Mixed live + sample', cls: 'bg-sky-100 text-sky-800', hint: 'Some items matched live online; others used sample prices.' };
+      if (s === 'sample_fallback') return { label: 'Sample catalog', cls: 'bg-amber-100 text-amber-800', hint: 'Example prices only \\u2014 add a free Kroger or Serper key for live prices.' };
       return { label: 'Unknown', cls: 'bg-stone-100 text-stone-600', hint: '' };
     },
     source() { return this.sourceOf(this.run.catalog_source); },
@@ -483,8 +497,12 @@ function app() {
       if (tags) bits.push(tags + (tags === 1 ? ' unreadable tag' : ' unreadable tags'));
       if (bc) bits.push(bc + (bc === 1 ? ' unreadable barcode' : ' unreadable barcodes'));
       if (low) bits.push(low + (low === 1 ? ' uncertain item' : ' uncertain items'));
+      const extras = [];
+      if (s.dropped_blurry_frames) extras.push(s.dropped_blurry_frames + ' blurry');
+      if (s.skipped_duplicate_frames) extras.push(s.skipped_duplicate_frames + ' duplicate');
+      if (s.capped_frames) extras.push(s.capped_frames + ' capped for cost control');
       const frames = s.total_seconds
-        ? 'We looked at ' + s.total_seconds + ' second' + (s.total_seconds === 1 ? '' : 's') + ' of video and used ' + s.kept_frames + ' clear frame' + (s.kept_frames === 1 ? '' : 's') + (s.dropped_blurry_frames ? ' (' + s.dropped_blurry_frames + ' too blurry to use).' : '.')
+        ? 'We looked at ' + s.total_seconds + ' second' + (s.total_seconds === 1 ? '' : 's') + ' of video and used ' + s.kept_frames + ' clear frame' + (s.kept_frames === 1 ? '' : 's') + (extras.length ? ' (skipped ' + extras.join(', ') + ').' : '.')
         : 'Video details are not available for this scan.';
       const barcodes = (s.barcodes_read || 0) + ' barcode' + ((s.barcodes_read || 0) === 1 ? '' : 's') + ' read' + (bc ? ', ' + bc + " couldn't be read." : '.');
       return { ok: ok, label: ok ? 'All tags read clearly' : bits.join(' \\u00B7 '), frames: frames, barcodes: barcodes };

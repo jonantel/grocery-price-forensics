@@ -4,43 +4,15 @@ import re
 from datetime import datetime, timezone
 
 import boto3
+import budget_guard
 import pandas as pd
+import price_lookup
 from botocore.exceptions import ClientError
-from rapidfuzz import fuzz, process
 
 s3 = boto3.client("s3")
 
 MAX_RUNS = 100
 MAX_POINTS_PER_PRODUCT = 500
-
-# Built-in reference of Aldi items as listed on Instacart (illustrative SAMPLE prices, not live data).
-DEFAULT_CATALOG = [
-    {"name": "Clancy's Wavy Potato Chips 10 oz", "price": 2.19},
-    {"name": "Friendly Farms Whole Milk 1 gal", "price": 3.85},
-    {"name": "Goldhen Large Eggs 12 ct", "price": 2.75},
-    {"name": "Millville Crispy Oats 12 oz", "price": 1.99},
-    {"name": "Simply Nature Organic Baby Spinach 5 oz", "price": 2.89},
-    {"name": "Kirkwood Boneless Skinless Chicken Breasts 1 lb", "price": 3.29},
-    {"name": "L'oven Fresh White Bread 20 oz", "price": 1.65},
-    {"name": "Friendly Farms 2% Reduced Fat Milk 1 gal", "price": 3.75},
-    {"name": "Happy Farms Shredded Mozzarella Cheese 8 oz", "price": 2.45},
-    {"name": "Happy Farms Unsalted Butter 16 oz", "price": 4.35},
-    {"name": "Never Any! Ground Beef 80/20 1 lb", "price": 5.29},
-    {"name": "Fresh Bananas 1 lb", "price": 0.55},
-    {"name": "Fresh Gala Apples 3 lb", "price": 4.49},
-    {"name": "Russet Potatoes 5 lb", "price": 3.49},
-    {"name": "Yellow Onions 3 lb", "price": 2.99},
-    {"name": "Specially Selected Pasta Sauce 24 oz", "price": 2.95},
-    {"name": "Priano Spaghetti Pasta 16 oz", "price": 1.29},
-    {"name": "Season's Choice Frozen Broccoli Florets 12 oz", "price": 1.69},
-    {"name": "Nature's Nectar Orange Juice 52 oz", "price": 3.49},
-    {"name": "Bremer Cheddar Cheese Slices 12 oz", "price": 2.69},
-    {"name": "Belmont Peanut Butter 16 oz", "price": 2.15},
-    {"name": "Specially Selected Greek Yogurt Plain 32 oz", "price": 3.99},
-    {"name": "Fusia Soy Sauce 10 oz", "price": 2.29},
-    {"name": "Benton's Chocolate Chip Cookies 13 oz", "price": 2.49},
-    {"name": "Sweet Harvest Granulated Sugar 4 lb", "price": 3.39},
-]
 
 
 def norm(s):
@@ -69,26 +41,6 @@ def put_status(bucket, walk_id, stage, message, **extra):
     body = {"walk_id": walk_id, "stage": stage, "message": message}
     body.update(extra)
     put_json(bucket, "public/status.json", body, indent=2)
-
-
-def load_catalog(bucket, store_slug, zip_code):
-    """zip catalog -> chain catalog -> reference.json -> built-in sample. Returns (items, source, file)."""
-    candidates = [
-        (f"online-catalog/{store_slug}_{zip_code}.json", "zip_catalog"),
-        (f"online-catalog/{store_slug}.json", "chain_catalog"),
-        ("online-catalog/reference.json", "chain_catalog"),
-    ]
-    for key, source in candidates:
-        try:
-            data = get_json(bucket, key)
-        except Exception as e:
-            print(f"catalog {key} unreadable: {e!r}")
-            continue
-        if isinstance(data, dict):
-            data = data.get("items", [])
-        if data:
-            return data, source, key
-    return DEFAULT_CATALOG, "sample_fallback", "built-in"
 
 
 def list_batches(bucket, walk_id):
@@ -143,14 +95,14 @@ def handler(event, context):
                 if dk and dk not in seen:
                     seen[dk] = it
 
+        items_list = list(seen.values())
         store_slug = slugify(store)
-        catalog, catalog_source, catalog_file = load_catalog(bucket, store_slug, zip_code)
-        names = [c["name"] for c in catalog]
-        norm_names = [norm(n) for n in names]
+        matches, catalog_source, catalog_file, lookup_stats = price_lookup.resolve_prices(
+            s3, bucket, store, store_slug, zip_code, items_list
+        )
 
         rows = []
-        for it in seen.values():
-            label = f"{it.get('brand', '')} {it.get('product_name', '')} {it.get('size_text', '')}".strip()
+        for idx, it in enumerate(items_list):
             store_price = to_float(it.get("in_store_price"))
             row = {
                 "walk_id": walk_id,
@@ -169,16 +121,23 @@ def handler(event, context):
                 "matched_catalog_item": None,
                 "match_score": None,
                 "online_price": None,
+                "promo_price": None,
                 "dollar_markup": None,
                 "pct_markup": None,
+                "price_source": None,
+                "online_merchant": None,
+                "online_url": None,
             }
-            m = process.extractOne(norm(label), norm_names, scorer=fuzz.token_set_ratio, score_cutoff=60)
-            if m:
-                ci = m[2]
-                online = to_float(catalog[ci]["price"])
-                row["matched_catalog_item"] = names[ci]
-                row["match_score"] = round(m[1], 1)
+            m = matches.get(idx)
+            if m and m.get("price") is not None:
+                online = to_float(m["price"])
+                row["matched_catalog_item"] = m.get("name")
+                row["match_score"] = m.get("match_score")
                 row["online_price"] = online
+                row["promo_price"] = to_float(m.get("promo_price"))
+                row["price_source"] = m.get("source")
+                row["online_merchant"] = m.get("merchant")
+                row["online_url"] = m.get("url")
                 if store_price and online is not None:
                     row["dollar_markup"] = round(online - store_price, 2)
                     row["pct_markup"] = round((online - store_price) / store_price * 100, 1)
@@ -195,12 +154,15 @@ def handler(event, context):
             "total_seconds": frame_metrics.get("total_seconds", 0),
             "kept_frames": frame_metrics.get("kept_frames", 0),
             "dropped_blurry_frames": frame_metrics.get("dropped_blurry_frames", 0),
+            "skipped_duplicate_frames": frame_metrics.get("skipped_duplicate_frames", 0),
+            "capped_frames": frame_metrics.get("capped_frames", 0),
             "low_confidence_count": sum(1 for r in rows if str(r.get("confidence", "")).lower() != "high"),
             "unreadable_tags": unreadable,
             "barcodes_read": sum(1 for r in rows if r["barcode_status"] == "read"),
             "barcodes_unreadable": sum(1 for r in rows if r["barcode_status"] == "unreadable")
             + sum(1 for t in unreadable if t.get("reason") == "barcode_unreadable"),
         }
+        cost = budget_guard.get_run_cost_summary(s3, bucket, walk_id)
 
         now = datetime.now(timezone.utc)
         run = {
@@ -211,6 +173,8 @@ def handler(event, context):
             "zip_code": zip_code,
             "catalog_source": catalog_source,
             "catalog_file": catalog_file,
+            "lookup_stats": lookup_stats,
+            "cost": cost,
             "summary": summary,
             "scan_quality": scan_quality,
             "items": rows,
@@ -229,6 +193,7 @@ def handler(event, context):
             "item_count": len(rows),
             "avg_markup_pct": summary["avg_pct_markup"],
             "catalog_source": catalog_source,
+            "run_usd": cost["run_usd"],
         })
         put_json(bucket, "public/runs_index.json", {"runs": runs[:MAX_RUNS]})
 
@@ -248,6 +213,7 @@ def handler(event, context):
                 "zip_code": zip_code,
                 "in_store_price": r["in_store_price"],
                 "online_price": r["online_price"],
+                "price_source": r["price_source"],
                 "walk_id": walk_id,
             })
             entry["points"] = pts[-MAX_POINTS_PER_PRODUCT:]
@@ -255,7 +221,7 @@ def handler(event, context):
 
         if rows:
             df = pd.DataFrame(rows)
-            for c in ("in_store_price", "size_oz", "online_price", "dollar_markup", "pct_markup", "match_score"):
+            for c in ("in_store_price", "size_oz", "online_price", "promo_price", "dollar_markup", "pct_markup", "match_score"):
                 df[c] = pd.to_numeric(df[c], errors="coerce")
             df["catalog_source"] = catalog_source
             df["captured_at"] = now.isoformat()
@@ -266,7 +232,7 @@ def handler(event, context):
                           Body=buf.getvalue())
 
         put_status(bucket, walk_id, "complete", f"Done: {len(rows)} items, {len(matched)} matched.",
-                   store=store, zip_code=zip_code, catalog_source=catalog_source)
+                   store=store, zip_code=zip_code, catalog_source=catalog_source, run_usd=cost["run_usd"])
         return {"ok": True, "items": len(rows)}
     except Exception as e:
         print("ERROR", repr(e))

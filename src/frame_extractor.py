@@ -5,6 +5,7 @@ import urllib.parse
 
 import boto3
 import cv2
+import numpy as np
 
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
@@ -14,6 +15,8 @@ SHARPNESS_MIN = 20.0
 CANDIDATES_PER_SEC = 4
 MAX_WIDTH = 1280
 BATCH_SIZE = 8
+MAX_FRAMES_PER_VIDEO = int(os.environ.get("MAX_FRAMES_PER_VIDEO", "24"))
+DUP_DIFF_THRESHOLD = float(os.environ.get("DUP_DIFF_THRESHOLD", "4.5"))
 
 # Upload keys look like raw-videos/walk_<timestamp>_<store_slug>_<zip>.mp4
 KEY_RE = re.compile(r"^(?P<rest>.+)_(?P<slug>[a-z0-9-]+)_(?P<zip>\d{5})$")
@@ -44,16 +47,29 @@ def put_status(bucket, walk_id, stage, message, **extra):
     )
 
 
+def _thumb(gray):
+    return cv2.resize(gray, (32, 18), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
 def extract_frames(path):
-    """Return (frames, metrics). frames = [(second, jpeg_bytes)]."""
+    """
+    Pick the sharpest frame per second, skip near-duplicate consecutive frames (standing still
+    on the same shelf), and enforce MAX_FRAMES_PER_VIDEO to bound downstream AI token spend.
+    Returns (frames, metrics) where frames = [(second, jpeg_bytes)].
+    """
     cap = cv2.VideoCapture(path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     duration = int(-(-total // fps)) if total else 0
     total_seconds = max(duration, 1)
-    out = []
+
+    candidates = []
+    dropped_blurry = 0
+    skipped_duplicates = 0
+    prev_thumb = None
+
     for sec in range(total_seconds):
-        best, best_var = None, -1.0
+        best, best_gray, best_var = None, None, -1.0
         for i in range(CANDIDATES_PER_SEC):
             pos = int((sec + i / CANDIDATES_PER_SEC) * fps)
             if total and pos >= total:
@@ -65,20 +81,46 @@ def extract_frames(path):
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             var = cv2.Laplacian(gray, cv2.CV_64F).var()
             if var > best_var:
-                best, best_var = frame, var
-        if best is not None and best_var > SHARPNESS_MIN:
-            h, w = best.shape[:2]
-            if w > MAX_WIDTH:
-                scale = MAX_WIDTH / w
-                best = cv2.resize(best, (MAX_WIDTH, int(h * scale)), interpolation=cv2.INTER_AREA)
-            ok, buf = cv2.imencode(".jpg", best, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if ok:
-                out.append((sec, buf.tobytes()))
+                best, best_gray, best_var = frame, gray, var
+
+        if best is None or best_var <= SHARPNESS_MIN:
+            dropped_blurry += 1
+            continue
+
+        cur_thumb = _thumb(best_gray)
+        if prev_thumb is not None:
+            diff = float(np.mean(np.abs(cur_thumb - prev_thumb)))
+            if diff < DUP_DIFF_THRESHOLD:
+                skipped_duplicates += 1
+                continue
+        prev_thumb = cur_thumb
+        candidates.append((sec, best))
+
     cap.release()
+
+    # Enforce hard per-video frame cap by uniformly sampling across distinct frames.
+    capped_frames = 0
+    if len(candidates) > MAX_FRAMES_PER_VIDEO:
+        capped_frames = len(candidates) - MAX_FRAMES_PER_VIDEO
+        idxs = np.linspace(0, len(candidates) - 1, MAX_FRAMES_PER_VIDEO, dtype=int)
+        candidates = [candidates[int(i)] for i in idxs]
+
+    out = []
+    for sec, img in candidates:
+        h, w = img.shape[:2]
+        if w > MAX_WIDTH:
+            scale = MAX_WIDTH / w
+            img = cv2.resize(img, (MAX_WIDTH, int(h * scale)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            out.append((sec, buf.tobytes()))
+
     metrics = {
         "total_seconds": total_seconds,
         "kept_frames": len(out),
-        "dropped_blurry_frames": total_seconds - len(out),
+        "dropped_blurry_frames": dropped_blurry,
+        "skipped_duplicate_frames": skipped_duplicates,
+        "capped_frames": capped_frames,
     }
     return out, metrics
 
@@ -121,10 +163,13 @@ def handler(event, context):
                         "frame_keys": batch,
                     }),
                 )
-            put_status(bucket, walk_id, "analyzing_frames",
-                       f"Kept {metrics['kept_frames']} of {metrics['total_seconds']} seconds "
-                       f"({metrics['dropped_blurry_frames']} too blurry); sent {len(batches)} batch(es) for analysis...",
-                       frame_metrics=metrics, **meta)
+            put_status(
+                bucket, walk_id, "analyzing_frames",
+                f"Kept {metrics['kept_frames']} unique sharp frame(s) from {metrics['total_seconds']}s "
+                f"({metrics['dropped_blurry_frames']} blurry, {metrics['skipped_duplicate_frames']} duplicate); "
+                f"sent {len(batches)} batch(es) for analysis...",
+                frame_metrics=metrics, **meta,
+            )
         except Exception as e:
             print("ERROR", repr(e))
             put_status(bucket, walk_id, "error", f"Frame extraction failed: {e}", **meta)

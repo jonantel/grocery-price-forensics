@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 
 import boto3
+import budget_guard
 
 s3 = boto3.client("s3")
 lam = boto3.client("lambda")
@@ -15,6 +16,7 @@ API_URL = "https://api.anthropic.com/v1/messages"
 PRIMARY_MODEL = "claude-haiku-4-5"
 FALLBACK_MODEL = "claude-sonnet-4-5"
 LOW_CONF_THRESHOLD = 0.30
+CLAUDE_MAX_TOKENS = int(os.environ.get("CLAUDE_MAX_TOKENS", "1536"))
 MATCHER = os.environ.get("MATCHER_FUNCTION_NAME", "aldi-catalog-matcher")
 
 SYSTEM_PROMPT = (
@@ -85,12 +87,15 @@ def parse_result(text):
     return items, tags
 
 
-def call_claude(model, content):
+def call_claude(model, content, bucket, walk_id, batch_index):
+    """Budget-guarded call to Anthropic Messages API; writes exact USD receipt to ops/ai-receipts/."""
+    budget_guard.check_budget(s3, bucket, walk_id)
+
     payload = json.dumps({
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": CLAUDE_MAX_TOKENS,
         "temperature": 0,
-        "system": SYSTEM_PROMPT,
+        "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": content}],
     }).encode()
     headers = {
@@ -104,6 +109,8 @@ def call_claude(model, content):
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 body = json.loads(resp.read())
+            usage = body.get("usage") or {}
+            budget_guard.record_usage(s3, bucket, walk_id, batch_index, model, usage)
             return "".join(b.get("text", "") for b in body.get("content", []) if b.get("type") == "text")
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:500]
@@ -127,20 +134,26 @@ def low_conf_ratio(items):
     return sum(1 for i in items if str(i.get("confidence", "")).lower() != "high") / len(items)
 
 
-def analyze(content):
-    """Haiku first; fall back to Sonnet on error or >30% low-confidence tags."""
+def analyze(content, bucket, walk_id, batch_index):
+    """Haiku first; fall back to Sonnet on error or >30% low-confidence tags (if budget allows)."""
     haiku = None
     try:
-        haiku = parse_result(call_claude(PRIMARY_MODEL, content))
+        haiku = parse_result(call_claude(PRIMARY_MODEL, content, bucket, walk_id, batch_index))
         ratio = low_conf_ratio(haiku[0])
         if ratio <= LOW_CONF_THRESHOLD:
             return haiku[0], haiku[1], PRIMARY_MODEL
         print(f"{PRIMARY_MODEL} low-confidence ratio {ratio:.2f} > {LOW_CONF_THRESHOLD}; falling back")
+    except budget_guard.BudgetExceededError:
+        raise
     except Exception as e:
         print(f"Model {PRIMARY_MODEL} failed: {e!r}")
     try:
-        items, tags = parse_result(call_claude(FALLBACK_MODEL, content))
+        items, tags = parse_result(call_claude(FALLBACK_MODEL, content, bucket, walk_id, batch_index))
         return items, tags, FALLBACK_MODEL
+    except budget_guard.BudgetExceededError:
+        if haiku is not None:
+            return haiku[0], haiku[1], PRIMARY_MODEL
+        raise
     except Exception as e:
         print(f"Model {FALLBACK_MODEL} failed: {e!r}")
         if haiku is not None:
@@ -168,7 +181,7 @@ def handler(event, context):
                     "data": base64.b64encode(raw).decode("ascii")}})
             content.append({"type": "text",
                             "text": "Extract all grocery items and shelf prices from these store frames. Return only the JSON object."})
-            items, unreadable, model = analyze(content)
+            items, unreadable, model = analyze(content, bucket, walk_id, idx)
             s3.put_object(
                 Bucket=bucket,
                 Key=f"extracted-json/{walk_id}/batch_{idx:04d}.json",
@@ -196,6 +209,11 @@ def handler(event, context):
                     "store": store, "zip_code": zip_code,
                 }).encode(),
             )
+        except budget_guard.BudgetExceededError as e:
+            # Do NOT re-raise to SQS — we want the message deleted immediately, not retried 3x.
+            print("BUDGET_GUARD_STOP", repr(e))
+            put_status(bucket, walk_id, "error", str(e), **meta)
+            continue
         except Exception as e:
             print("ERROR", repr(e))
             put_status(bucket, walk_id, "error", f"Vision analysis failed: {str(e)[:300]}", **meta)

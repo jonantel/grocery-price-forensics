@@ -22,6 +22,46 @@ variable "anthropic_api_key" {
   sensitive = true
 }
 
+# Optional free-tier price lookup API credentials (leave empty to use S3 catalogs + Open Prices + sample fallback).
+variable "kroger_client_id" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "kroger_client_secret" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "serper_api_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+# Hard cost-control limits enforced by frame_extractor, budget_guard, and price_lookup.
+variable "max_frames_per_video" {
+  type    = string
+  default = "24"
+}
+
+variable "max_run_usd" {
+  type    = string
+  default = "0.25"
+}
+
+variable "max_monthly_usd" {
+  type    = string
+  default = "5.00"
+}
+
+variable "max_live_lookups_per_run" {
+  type    = string
+  default = "15"
+}
+
 locals {
   account_id  = "575554646331"
   bucket_name = "aldi-price-forensics-575554646331"
@@ -35,6 +75,16 @@ resource "aws_s3_bucket" "data" {
 
 resource "aws_s3_bucket_lifecycle_configuration" "data" {
   bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "abort-incomplete-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+
   rule {
     id     = "expire-raw-videos"
     status = "Enabled"
@@ -43,6 +93,39 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
     expiration {
       days = 2
+    }
+  }
+
+  rule {
+    id     = "expire-frames"
+    status = "Enabled"
+    filter {
+      prefix = "frames/"
+    }
+    expiration {
+      days = 7
+    }
+  }
+
+  rule {
+    id     = "expire-extracted-json"
+    status = "Enabled"
+    filter {
+      prefix = "extracted-json/"
+    }
+    expiration {
+      days = 30
+    }
+  }
+
+  rule {
+    id     = "expire-athena-results"
+    status = "Enabled"
+    filter {
+      prefix = "athena-results/"
+    }
+    expiration {
+      days = 1
     }
   }
 }
@@ -58,10 +141,19 @@ resource "aws_s3_bucket_cors_configuration" "data" {
   }
 }
 
-# ---------------- SQS ----------------
+# ---------------- SQS + DLQ ----------------
+resource "aws_sqs_queue" "vision_dlq" {
+  name                      = "aldi-vision-dlq"
+  message_retention_seconds = 604800
+}
+
 resource "aws_sqs_queue" "vision" {
   name                       = "aldi-vision-queue"
   visibility_timeout_seconds = 300
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.vision_dlq.arn
+    maxReceiveCount     = 3
+  })
 }
 
 # ---------------- IAM (Lambda) ----------------
@@ -102,11 +194,6 @@ resource "aws_iam_role_policy" "lambda" {
         Effect   = "Allow"
         Action   = ["lambda:InvokeFunction"]
         Resource = "arn:aws:lambda:us-east-1:575554646331:function:aldi-*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel", "bedrock:Converse"]
-        Resource = "*"
       }
     ]
   })
@@ -129,7 +216,8 @@ resource "aws_lambda_function" "frame_extractor" {
   }
   environment {
     variables = {
-      VISION_QUEUE_URL = aws_sqs_queue.vision.url
+      VISION_QUEUE_URL     = aws_sqs_queue.vision.url
+      MAX_FRAMES_PER_VIDEO = var.max_frames_per_video
     }
   }
   depends_on = [aws_iam_role_policy.lambda]
@@ -150,6 +238,9 @@ resource "aws_lambda_function" "vision_worker" {
     variables = {
       MATCHER_FUNCTION_NAME = "aldi-catalog-matcher"
       ANTHROPIC_API_KEY     = var.anthropic_api_key
+      MAX_RUN_USD           = var.max_run_usd
+      MAX_MONTHLY_USD       = var.max_monthly_usd
+      CLAUDE_MAX_TOKENS     = "1536"
     }
   }
   depends_on = [aws_iam_role_policy.lambda]
@@ -165,6 +256,17 @@ resource "aws_lambda_function" "catalog_matcher" {
   architectures = ["x86_64"]
   image_config {
     command = ["catalog_matcher.handler"]
+  }
+  environment {
+    variables = {
+      KROGER_CLIENT_ID         = var.kroger_client_id
+      KROGER_CLIENT_SECRET     = var.kroger_client_secret
+      SERPER_API_KEY           = var.serper_api_key
+      MAX_LIVE_LOOKUPS_PER_RUN = var.max_live_lookups_per_run
+      MAX_RUN_USD              = var.max_run_usd
+      MAX_MONTHLY_USD          = var.max_monthly_usd
+      ENABLE_OPEN_PRICES       = "true"
+    }
   }
   depends_on = [aws_iam_role_policy.lambda]
 }
@@ -194,6 +296,9 @@ resource "aws_lambda_event_source_mapping" "vision" {
   event_source_arn = aws_sqs_queue.vision.arn
   function_name    = aws_lambda_function.vision_worker.arn
   batch_size       = 1
+  scaling_config {
+    maximum_concurrency = 2
+  }
 }
 
 # ---------------- Cloudflare signer user ----------------
