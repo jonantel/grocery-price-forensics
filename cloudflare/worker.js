@@ -588,113 +588,266 @@ const PAGE = `<!doctype html>
     </template>
   </section>
 
-  <!-- TAB 2: Staple Basket (120 items across stores & US locations) -->
+  <!-- TAB 2: Staple Basket (120+ items across US states & national stores) -->
   <section x-show="tab === 'basket'" class="space-y-5">
-    <div class="bg-white rounded-2xl border border-stone-200 p-5 space-y-4">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <div>
-          <h2 class="text-lg font-semibold">120-Item Staple Basket Across Stores &amp; US Locations</h2>
-          <p class="text-xs text-stone-500">Top 100 grocery items + Top 20 household non-grocery items priced live across real store locations, with direct product links.</p>
-        </div>
-        <span class="text-xs text-stone-400" x-show="basket.generated_at" x-text="'Updated ' + when(basket.generated_at)"></span>
-      </div>
 
-      <!-- Store Leaderboard -->
-      <div x-show="(basket.stores || []).length" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <template x-for="(s, idx) in (basket.stores || [])" :key="s.key">
-          <div class="rounded-xl border p-3.5" :class="idx === 0 && s.common_basket_total ? 'border-[#15803D] bg-green-50/50' : 'border-stone-200 bg-stone-50/60'">
-            <div class="flex items-center justify-between gap-2">
-              <span class="font-semibold text-sm" x-text="s.store + ' \\u00B7 ' + s.city"></span>
-              <span x-show="idx === 0 && s.common_basket_total" class="rounded-full bg-[#15803D] text-white px-2 py-0.5 text-[10px] font-semibold">Lowest basket</span>
-            </div>
-            <div class="text-xs text-stone-500 mt-0.5" x-text="(s.zip && s.zip !== 'US' ? 'ZIP ' + s.zip + ' \\u00B7 ' : '') + s.items_priced + ' items priced'"></div>
-            <div class="mt-2 flex items-baseline justify-between">
-              <span class="text-xl font-bold text-stone-900" x-text="s.common_basket_total ? '$' + s.common_basket_total.toFixed(2) : (s.items_priced + ' core items')"></span>
-              <span class="text-xs font-medium" :class="s.avg_pct_above_lowest <= 3 ? 'text-[#15803D]' : 'text-amber-700'"
-                x-text="'avg +' + Number(s.avg_pct_above_lowest || 0).toFixed(1) + '% vs lowest'"></span>
-            </div>
-            <div class="text-[11px] text-stone-400" x-show="s.common_basket_total" x-text="'Apples-to-apples across ' + s.common_basket_items + ' shared items'"></div>
-          </div>
-        </template>
-      </div>
-
-      <!-- Filters -->
-      <div class="flex flex-col sm:flex-row gap-2.5 pt-2">
-        <div class="inline-flex rounded-xl bg-stone-100 p-1 text-xs sm:text-sm">
-          <button type="button" @click="bType = 'all'" :class="bType === 'all' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'" class="px-3 py-1.5 rounded-lg">All (120)</button>
-          <button type="button" @click="bType = 'grocery'" :class="bType === 'grocery' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'" class="px-3 py-1.5 rounded-lg">Grocery (100)</button>
-          <button type="button" @click="bType = 'non_grocery'" :class="bType === 'non_grocery' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'" class="px-3 py-1.5 rounded-lg">Non-Grocery (20)</button>
-        </div>
-        <select x-model="bCat" class="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm">
-          <option value="">All categories</option>
-          <template x-for="c in basketCategories()" :key="c"><option :value="c" x-text="c"></option></template>
-        </select>
-        <input x-model="bq" type="search" placeholder="Search 120 items&hellip;"
-          class="flex-1 rounded-xl border border-stone-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#15803D]">
-        <select x-model="bSort" class="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm">
-          <option value="spread">Sort: Biggest location spread</option>
-          <option value="name">Sort: A &ndash; Z</option>
-          <option value="low">Sort: Lowest price</option>
-        </select>
-      </div>
-    </div>
-
-    <div x-show="basketRows().length === 0" class="bg-white rounded-2xl border border-stone-200 p-8 text-center text-stone-500">
-      No staple basket items match your filter yet.
-    </div>
-
-    <div class="space-y-2.5">
-      <template x-for="it in basketRows()" :key="it.id">
-        <details class="bg-white rounded-2xl border border-stone-200 p-4">
-          <summary class="cursor-pointer list-none flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+    <!-- DRILL-DOWN VIEW: Single State / Store Full Price Sheet -->
+    <template x-if="selectedStore">
+      <div class="space-y-4">
+        <div class="bg-white rounded-2xl border border-[#15803D] p-5 space-y-3 shadow-sm">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <div class="font-semibold flex flex-wrap items-center gap-2">
-                <span x-text="it.name"></span>
-                <span class="rounded-full bg-stone-100 text-stone-600 px-2 py-0.5 text-[11px] font-medium" x-text="it.category"></span>
+              <button type="button" @click="selectedStore = null; sqFilter = ''"
+                class="text-xs font-semibold text-[#15803D] hover:underline mb-1 inline-block">&larr; Back to all states &amp; stores</button>
+              <h2 class="text-xl font-bold text-stone-900"
+                x-text="(selectedStore.state && selectedStore.state !== 'US' ? selectedStore.state + ' \\u00B7 ' : '') + selectedStore.store + ' (' + selectedStore.city + ')'"></h2>
+              <p class="text-xs text-stone-500 mt-0.5" x-text="(selectedStore.store_name || '') + (selectedStore.address ? ' \\u00B7 ' + selectedStore.address : '')"></p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+              <div class="rounded-xl bg-stone-50 border border-stone-200 px-3 py-2 text-center">
+                <div class="text-stone-400">Items priced</div>
+                <div class="text-base font-bold text-stone-900" x-text="selectedStore.items_priced"></div>
               </div>
-              <div class="text-xs text-stone-500 mt-0.5" x-show="it.stores_priced > 0"
-                x-text="it.stores_priced + ' stores/locations \\u00B7 low ' + money(it.min_price) + ' (' + storeLabel(it.cheapest_store_key) + ') \\u00B7 high ' + money(it.max_price) + ' (' + storeLabel(it.priciest_store_key) + ')'"></div>
+              <div class="rounded-xl bg-green-50 border border-green-200 px-3 py-2 text-center" x-show="selectedStore.common_basket_total">
+                <div class="text-green-700" x-text="selectedStore.common_basket_items + '-item basket'"></div>
+                <div class="text-base font-bold text-[#15803D]" x-text="money(selectedStore.common_basket_total)"></div>
+              </div>
+              <div class="rounded-xl bg-stone-50 border border-stone-200 px-3 py-2 text-center">
+                <div class="text-stone-400">Vs. national median</div>
+                <div class="text-base font-bold" :class="selectedStore.avg_pct_vs_median <= 0 ? 'text-[#15803D]' : 'text-amber-700'"
+                  x-text="(selectedStore.avg_pct_vs_median > 0 ? '+' : '') + Number(selectedStore.avg_pct_vs_median || 0).toFixed(1) + '%'"></div>
+              </div>
             </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <span x-show="it.dollar_spread > 0" class="rounded-full bg-amber-100 text-amber-800 px-2.5 py-1 text-xs font-semibold"
-                x-text="money(it.dollar_spread) + ' spread (+' + Number(it.pct_spread || 0).toFixed(0) + '%)'"></span>
-              <span x-show="it.stores_priced > 1 && it.dollar_spread === 0" class="rounded-full bg-green-100 text-green-800 px-2.5 py-1 text-xs font-semibold">Same everywhere</span>
-            </div>
-          </summary>
-          <div class="overflow-x-auto mt-3 pt-3 border-t border-stone-100">
-            <table class="w-full text-xs sm:text-sm">
-              <thead class="text-stone-500 border-b border-stone-200">
-                <tr>
-                  <th class="text-left font-medium py-1.5 pr-3">Store &amp; Location</th>
-                  <th class="text-left font-medium py-1.5 pr-3">Exact Matched Product</th>
-                  <th class="text-left font-medium py-1.5 pr-3">Price</th>
-                  <th class="text-left font-medium py-1.5">Direct Link</th>
-                </tr>
-              </thead>
-              <tbody>
-                <template x-for="p in basketPriceList(it)" :key="p.key">
-                  <tr class="border-b border-stone-100">
-                    <td class="py-2 pr-3 font-medium" x-text="p.store + ' (' + p.city + (p.zip && p.zip !== 'US' ? ' ' + p.zip : '') + ')'"></td>
-                    <td class="py-2 pr-3 text-stone-600">
-                      <span x-text="p.product_title"></span>
-                      <span x-show="p.same_upc" class="ml-1 rounded bg-green-50 text-green-700 px-1.5 py-0.5 text-[10px]">Exact UPC</span>
-                    </td>
-                    <td class="py-2 pr-3 whitespace-nowrap font-semibold">
-                      <span x-text="money(p.price)"></span>
-                      <span x-show="p.promo_price" class="text-xs text-emerald-700 ml-1" x-text="'(Sale ' + money(p.promo_price) + ')'"></span>
-                    </td>
-                    <td class="py-2 whitespace-nowrap">
-                      <a x-show="p.url" :href="p.url" target="_blank" rel="noopener noreferrer"
-                        class="text-[#15803D] underline hover:text-green-900">Open product &#8599;</a>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
           </div>
-        </details>
-      </template>
-    </div>
+
+          <div class="flex flex-col sm:flex-row gap-2.5 pt-2 border-t border-stone-100">
+            <div class="inline-flex rounded-xl bg-stone-100 p-1 text-xs">
+              <button type="button" @click="bType = 'all'" :class="bType === 'all' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'" class="px-3 py-1.5 rounded-lg">All</button>
+              <button type="button" @click="bType = 'grocery'" :class="bType === 'grocery' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'" class="px-3 py-1.5 rounded-lg">Grocery</button>
+              <button type="button" @click="bType = 'non_grocery'" :class="bType === 'non_grocery' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'" class="px-3 py-1.5 rounded-lg">Non-Grocery</button>
+            </div>
+            <select x-model="bCat" class="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm">
+              <option value="">All categories</option>
+              <template x-for="c in basketCategories()" :key="c"><option :value="c" x-text="c"></option></template>
+            </select>
+            <input x-model="sqFilter" type="search" placeholder="Search items at this store&hellip;"
+              class="flex-1 rounded-xl border border-stone-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#15803D]">
+            <select x-model="sSort" class="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm">
+              <option value="diff">Sort: Biggest diff vs. median</option>
+              <option value="name">Sort: A &ndash; Z</option>
+              <option value="price">Sort: Price low &ndash; high</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-stone-200 p-4 sm:p-5 overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-stone-500 border-b border-stone-200">
+              <tr>
+                <th class="text-left font-medium py-2 pr-3">Staple Item &amp; Exact Store SKU</th>
+                <th class="text-left font-medium py-2 pr-3">Category</th>
+                <th class="text-left font-medium py-2 pr-3">Store Price</th>
+                <th class="text-left font-medium py-2 pr-3">National Median</th>
+                <th class="text-left font-medium py-2 pr-3">Vs. Median</th>
+                <th class="text-left font-medium py-2">Direct Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in selectedStoreRows()" :key="row.id">
+                <tr class="border-b border-stone-100 hover:bg-stone-50">
+                  <td class="py-2.5 pr-3">
+                    <div class="font-medium" x-text="row.name"></div>
+                    <div class="text-xs text-stone-500">
+                      <span x-text="row.p.product_title"></span>
+                      <span x-show="row.p.same_upc" class="ml-1 rounded bg-green-50 text-green-700 px-1.5 py-0.5 text-[10px]">Exact UPC</span>
+                    </div>
+                  </td>
+                  <td class="py-2.5 pr-3 text-xs text-stone-500 whitespace-nowrap" x-text="row.category"></td>
+                  <td class="py-2.5 pr-3 whitespace-nowrap font-semibold">
+                    <span x-text="money(row.p.price)"></span>
+                    <div class="text-xs text-emerald-700 font-medium" x-show="row.p.promo_price" x-text="'Sale ' + money(row.p.promo_price)"></div>
+                  </td>
+                  <td class="py-2.5 pr-3 whitespace-nowrap text-stone-500" x-text="money(row.median_price)"></td>
+                  <td class="py-2.5 pr-3 whitespace-nowrap text-xs font-semibold"
+                    :class="row.diff <= 0 ? 'text-[#15803D]' : 'text-amber-700'"
+                    x-text="row.diff == null ? '-' : (row.diff > 0 ? '+' : '') + money(row.diff) + ' (' + (row.diffPct > 0 ? '+' : '') + row.diffPct.toFixed(1) + '%)'"></td>
+                  <td class="py-2.5 whitespace-nowrap text-xs">
+                    <a x-show="row.p.url" :href="row.p.url" target="_blank" rel="noopener noreferrer"
+                      class="text-[#15803D] underline hover:text-green-900">Open product &#8599;</a>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="selectedStoreRows().length === 0"><td colspan="6" class="py-8 text-center text-stone-400">No items match your filter.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- OVERVIEW: State-by-State Summary + National Retailers + 130-Item Cross-Store Explorer -->
+    <template x-if="!selectedStore">
+      <div class="space-y-5">
+        <div class="bg-white rounded-2xl border border-stone-200 p-5 space-y-4">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 class="text-lg font-semibold">How Grocery &amp; Household Prices Vary by State</h2>
+              <p class="text-xs text-stone-500"
+                x-text="(basket.total_items || 120) + '-item basket (' + (basket.grocery_count || 100) + ' grocery + ' + (basket.non_grocery_count || 20) + ' non-grocery) across ' + (basket.states_count || 0) + ' US states. Click any state or store to see every item price and direct product link.'"></p>
+            </div>
+            <span class="text-xs text-stone-400" x-show="basket.generated_at" x-text="'Updated ' + when(basket.generated_at)"></span>
+          </div>
+
+          <!-- State Variation Headline Banner -->
+          <div x-show="stateStores().length >= 2" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="rounded-xl bg-green-50 border border-green-200 p-3.5">
+              <div class="text-xs text-green-800 font-medium">Cheapest State Basket</div>
+              <div class="text-2xl font-bold text-[#15803D] mt-0.5" x-text="money(stateStores()[0].common_basket_total)"></div>
+              <div class="text-xs text-stone-600" x-text="stateStores()[0].state + ' \\u00B7 ' + stateStores()[0].store + ' (' + stateStores()[0].city + ')'"></div>
+            </div>
+            <div class="rounded-xl bg-amber-50 border border-amber-200 p-3.5">
+              <div class="text-xs text-amber-800 font-medium">Most Expensive State Basket</div>
+              <div class="text-2xl font-bold text-amber-700 mt-0.5" x-text="money(stateStores()[stateStores().length - 1].common_basket_total)"></div>
+              <div class="text-xs text-stone-600" x-text="stateStores()[stateStores().length - 1].state + ' \\u00B7 ' + stateStores()[stateStores().length - 1].store + ' (' + stateStores()[stateStores().length - 1].city + ')'"></div>
+            </div>
+            <div class="rounded-xl bg-stone-50 border border-stone-200 p-3.5">
+              <div class="text-xs text-stone-500 font-medium">Same-Company State Spread</div>
+              <div class="text-2xl font-bold text-stone-900 mt-0.5"
+                x-text="'+' + money(stateStores()[stateStores().length - 1].dollars_above_cheapest_state)"></div>
+              <div class="text-xs text-stone-500"
+                x-text="'+' + Number(stateStores()[stateStores().length - 1].pct_above_cheapest_state || 0).toFixed(1) + '% across ' + (basket.common_kroger_items || 0) + ' identical shared items'"></div>
+            </div>
+          </div>
+
+          <!-- Clickable State-by-State Cards with Relative Price Bar -->
+          <div x-show="stateStores().length" class="space-y-2">
+            <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">State-by-State Ranking (Click any state to open full item list)</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              <template x-for="(s, idx) in stateStores()" :key="s.key">
+                <button type="button" @click="openStoreDetail(s)"
+                  class="text-left rounded-xl border p-3 transition hover:border-[#15803D] hover:shadow-sm"
+                  :class="idx === 0 ? 'border-[#15803D] bg-green-50/60' : 'border-stone-200 bg-stone-50/50'">
+                  <div class="flex items-center justify-between gap-1">
+                    <span class="font-bold text-sm text-stone-900" x-text="s.state + ' \\u00B7 ' + s.store"></span>
+                    <span class="text-[11px] font-semibold px-1.5 py-0.5 rounded"
+                      :class="idx === 0 ? 'bg-[#15803D] text-white' : (s.pct_above_cheapest_state > 15 ? 'bg-amber-100 text-amber-800' : 'bg-stone-200 text-stone-700')"
+                      x-text="idx === 0 ? 'Lowest' : '+' + Number(s.pct_above_cheapest_state || 0).toFixed(1) + '%'"></span>
+                  </div>
+                  <div class="text-[11px] text-stone-500 truncate" x-text="s.city + ' ' + s.zip + ' \\u00B7 ' + s.items_priced + ' items'"></div>
+                  <div class="mt-1.5 flex items-baseline justify-between">
+                    <span class="text-lg font-bold text-stone-900" x-text="money(s.common_basket_total)"></span>
+                    <span class="text-[11px] text-[#15803D] font-medium">View all &rarr;</span>
+                  </div>
+                  <div class="w-full bg-stone-200 rounded-full h-1.5 mt-1.5 overflow-hidden">
+                    <div class="h-1.5 rounded-full" :class="idx === 0 ? 'bg-[#15803D]' : (s.pct_above_cheapest_state > 15 ? 'bg-amber-500' : 'bg-emerald-600')"
+                      :style="'width:' + stateBarPct(s) + '%'"></div>
+                  </div>
+                  <div class="text-[10px] text-stone-400 mt-1" x-show="s.common_grocery_total"
+                    x-text="'Grocery ' + money(s.common_grocery_total) + ' \\u00B7 Household ' + money(s.common_non_grocery_total)"></div>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <!-- National First-Party Online Retailers (Target, Walmart) -->
+          <div x-show="nationalStores().length" class="space-y-2 pt-2 border-t border-stone-100">
+            <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">National Online Retailers (First-Party Only &mdash; 3rd-Party Resellers &amp; Multipacks Excluded)</div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <template x-for="s in nationalStores()" :key="s.key">
+                <button type="button" @click="openStoreDetail(s)"
+                  class="text-left rounded-xl border border-stone-200 bg-white p-3 hover:border-[#15803D] hover:shadow-sm transition">
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-sm" x-text="s.store + ' (Online)'"></span>
+                    <span class="text-xs font-semibold" :class="s.avg_pct_vs_median <= 0 ? 'text-[#15803D]' : 'text-amber-700'"
+                      x-text="(s.avg_pct_vs_median > 0 ? '+' : '') + Number(s.avg_pct_vs_median || 0).toFixed(1) + '% vs median'"></span>
+                  </div>
+                  <div class="text-xs text-stone-500 mt-1" x-text="s.items_priced + ' verified core items priced \\u00B7 View all \\u2192'"></div>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <!-- Item Filters -->
+          <div class="flex flex-col sm:flex-row gap-2.5 pt-2 border-t border-stone-100">
+            <div class="inline-flex rounded-xl bg-stone-100 p-1 text-xs sm:text-sm">
+              <button type="button" @click="bType = 'all'" :class="bType === 'all' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'"
+                class="px-3 py-1.5 rounded-lg" x-text="'All (' + (basket.total_items || 130) + ')'"></button>
+              <button type="button" @click="bType = 'grocery'" :class="bType === 'grocery' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'"
+                class="px-3 py-1.5 rounded-lg" x-text="'Grocery (' + (basket.grocery_count || 108) + ')'"></button>
+              <button type="button" @click="bType = 'non_grocery'" :class="bType === 'non_grocery' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'"
+                class="px-3 py-1.5 rounded-lg" x-text="'Non-Grocery (' + (basket.non_grocery_count || 22) + ')'"></button>
+            </div>
+            <select x-model="bCat" class="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm">
+              <option value="">All categories</option>
+              <template x-for="c in basketCategories()" :key="c"><option :value="c" x-text="c"></option></template>
+            </select>
+            <input x-model="bq" type="search" placeholder="Search staple items&hellip;"
+              class="flex-1 rounded-xl border border-stone-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#15803D]">
+            <select x-model="bSort" class="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm">
+              <option value="spread">Sort: Biggest state/store spread</option>
+              <option value="name">Sort: A &ndash; Z</option>
+              <option value="low">Sort: Lowest price</option>
+            </select>
+          </div>
+        </div>
+
+        <div x-show="basketRows().length === 0" class="bg-white rounded-2xl border border-stone-200 p-8 text-center text-stone-500">
+          No staple basket items match your filter yet.
+        </div>
+
+        <div class="space-y-2.5">
+          <template x-for="it in basketRows()" :key="it.id">
+            <details class="bg-white rounded-2xl border border-stone-200 p-4">
+              <summary class="cursor-pointer list-none flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <div class="font-semibold flex flex-wrap items-center gap-2">
+                    <span x-text="it.name"></span>
+                    <span class="rounded-full bg-stone-100 text-stone-600 px-2 py-0.5 text-[11px] font-medium" x-text="it.category"></span>
+                  </div>
+                  <div class="text-xs text-stone-500 mt-0.5" x-show="it.stores_priced > 0"
+                    x-text="it.stores_priced + ' stores/states \\u00B7 low ' + money(it.min_price) + ' (' + storeLabel(it.cheapest_store_key) + ') \\u00B7 high ' + money(it.max_price) + ' (' + storeLabel(it.priciest_store_key) + ')'"></div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span x-show="it.dollar_spread > 0" class="rounded-full bg-amber-100 text-amber-800 px-2.5 py-1 text-xs font-semibold"
+                    x-text="money(it.dollar_spread) + ' spread (+' + Number(it.pct_spread || 0).toFixed(0) + '%)'"></span>
+                  <span x-show="it.stores_priced > 1 && it.dollar_spread === 0" class="rounded-full bg-green-100 text-green-800 px-2.5 py-1 text-xs font-semibold">Same everywhere</span>
+                </div>
+              </summary>
+              <div class="overflow-x-auto mt-3 pt-3 border-t border-stone-100">
+                <table class="w-full text-xs sm:text-sm">
+                  <thead class="text-stone-500 border-b border-stone-200">
+                    <tr>
+                      <th class="text-left font-medium py-1.5 pr-3">State &amp; Store</th>
+                      <th class="text-left font-medium py-1.5 pr-3">Exact Matched Product</th>
+                      <th class="text-left font-medium py-1.5 pr-3">Price</th>
+                      <th class="text-left font-medium py-1.5">Direct Link</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="p in basketPriceList(it)" :key="p.key">
+                      <tr class="border-b border-stone-100">
+                        <td class="py-2 pr-3 font-medium" x-text="(p.state && p.state !== 'US' ? p.state + ' \\u00B7 ' : '') + p.store + ' (' + p.city + ')'"></td>
+                        <td class="py-2 pr-3 text-stone-600">
+                          <span x-text="p.product_title"></span>
+                          <span x-show="p.same_upc" class="ml-1 rounded bg-green-50 text-green-700 px-1.5 py-0.5 text-[10px]">Exact UPC</span>
+                        </td>
+                        <td class="py-2 pr-3 whitespace-nowrap font-semibold">
+                          <span x-text="money(p.price)"></span>
+                          <span x-show="p.promo_price" class="text-xs text-emerald-700 ml-1" x-text="'(Sale ' + money(p.promo_price) + ')'"></span>
+                        </td>
+                        <td class="py-2 whitespace-nowrap">
+                          <a x-show="p.url" :href="p.url" target="_blank" rel="noopener noreferrer"
+                            class="text-[#15803D] underline hover:text-green-900">Open product &#8599;</a>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </template>
+        </div>
+      </div>
+    </template>
   </section>
 
   <!-- TAB 3: Past runs -->
@@ -829,6 +982,7 @@ function app() {
     run: {}, latest: {}, viewingPast: false, knownWalk: null,
     runs: [], history: { products: {} }, hq: '',
     basket: { stores: [], items: [] }, bType: 'all', bCat: '', bq: '', bSort: 'spread',
+    selectedStore: null, sqFilter: '', sSort: 'diff',
     q: '', sortKey: 'dollar_markup', sortDir: -1, qOpen: false,
     adminUnlocked: false, adminPin: '', verifyMsg: '',
     lightbox: { open: false, src: '', title: '', item: null },
@@ -918,9 +1072,43 @@ function app() {
     },
 
     // ---------- staple basket helpers ----------
+    stateStores() { return (this.basket.stores || []).filter(s => s.common_basket_total != null); },
+    nationalStores() { return (this.basket.stores || []).filter(s => s.common_basket_total == null); },
+    stateBarPct(s) {
+      const list = this.stateStores();
+      if (!list.length) return 100;
+      const hi = list[list.length - 1].common_basket_total || 1;
+      const lo = list[0].common_basket_total || 0;
+      if (hi <= lo) return 100;
+      return Math.max(18, Math.round((s.common_basket_total / hi) * 100));
+    },
+    openStoreDetail(s) {
+      this.selectedStore = s; this.sqFilter = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    selectedStoreRows() {
+      if (!this.selectedStore) return [];
+      const sk = this.selectedStore.key, q = this.sqFilter.toLowerCase().trim();
+      let list = [];
+      for (const it of (this.basket.items || [])) {
+        const p = it.prices && it.prices[sk];
+        if (!p) continue;
+        if (this.bType !== 'all' && it.type !== this.bType) continue;
+        if (this.bCat && it.category !== this.bCat) continue;
+        if (q && (it.name + ' ' + it.category + ' ' + (p.product_title || '')).toLowerCase().indexOf(q) < 0) continue;
+        const med = it.median_price;
+        const diff = (med != null && p.price != null) ? Math.round((p.price - med) * 100) / 100 : null;
+        const diffPct = (med && diff != null) ? (diff / med) * 100 : 0;
+        list.push({ id: it.id, name: it.name, category: it.category, median_price: med, p: p, diff: diff, diffPct: diffPct });
+      }
+      if (this.sSort === 'diff') list.sort((a, b) => Math.abs(b.diff || 0) - Math.abs(a.diff || 0));
+      else if (this.sSort === 'price') list.sort((a, b) => (a.p.price || 999) - (b.p.price || 999));
+      else list.sort((a, b) => a.name.localeCompare(b.name));
+      return list;
+    },
     storeLabel(key) {
       const s = (this.basket.stores || []).find(x => x.key === key);
-      return s ? (s.store + (s.zip && s.zip !== 'US' ? ' ' + s.zip : '')) : (key || '');
+      return s ? ((s.state && s.state !== 'US' ? s.state + ' ' : '') + s.store) : (key || '');
     },
     basketCategories() {
       const set = new Set((this.basket.items || []).map(i => i.category).filter(Boolean));

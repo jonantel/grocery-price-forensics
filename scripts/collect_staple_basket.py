@@ -1,7 +1,7 @@
 """
-Proactively collect live prices for the 120-item Master Staple Basket (100 grocery + 20 non-grocery)
-across 6 real US Kroger-family locations ($0 official Kroger API) + budget-capped Serper Shopping
-multi-retailer sweep (1 query per core item captures Walmart, Target, Instacart, Aldi, etc.).
+Proactively collect live prices for the 130-item Master Staple Basket (108 grocery + 22 non-grocery)
+across 16 real US states ($0 official Kroger API, exact-UPC anchored) + strict first-party Target
+and Walmart sweep via Serper Shopping (rejects all 3rd-party marketplace resellers and multipacks).
 
 Writes:
   - s3://<bucket>/public/staple_basket.json
@@ -28,19 +28,44 @@ KROGER_CLIENT_ID = os.environ.get("TF_VAR_kroger_client_id", os.environ.get("KRO
 KROGER_CLIENT_SECRET = os.environ.get("TF_VAR_kroger_client_secret", os.environ.get("KROGER_CLIENT_SECRET", "")).strip()
 SERPER_API_KEY = os.environ.get("TF_VAR_serper_api_key", os.environ.get("SERPER_API_KEY", "")).strip()
 
+# 16 real US states spanning Midwest, South, Mid-Atlantic, Mountain West, Southwest, and West Coast ($0 Kroger API).
 KROGER_LOCATIONS = [
-    {"key": "gerbes_65203", "store": "Gerbes", "slug": "gerbes", "zip": "65203", "city": "Columbia, MO", "domain": "www.gerbes.com"},
-    {"key": "harris-teeter_20176", "store": "Harris Teeter", "slug": "harris-teeter", "zip": "20176", "city": "Leesburg, VA", "domain": "www.harristeeter.com"},
-    {"key": "kroger_45202", "store": "Kroger", "slug": "kroger", "zip": "45202", "city": "Cincinnati, OH", "domain": "www.kroger.com"},
-    {"key": "ralphs_90024", "store": "Ralphs", "slug": "ralphs", "zip": "90024", "city": "Los Angeles, CA", "domain": "www.ralphs.com"},
-    {"key": "king-soopers_80202", "store": "King Soopers", "slug": "king-soopers", "zip": "80202", "city": "Denver, CO", "domain": "www.kingsoopers.com"},
-    {"key": "fred-meyer_98109", "store": "Fred Meyer", "slug": "fred-meyer", "zip": "98109", "city": "Seattle, WA", "domain": "www.fredmeyer.com"},
+    {"key": "mo_gerbes_65203",        "state": "MO", "region": "Midwest",       "store": "Gerbes",        "slug": "gerbes",        "zip": "65203", "city": "Columbia, MO"},
+    {"key": "oh_kroger_45202",        "state": "OH", "region": "Midwest",       "store": "Kroger",        "slug": "kroger",        "zip": "45202", "city": "Cincinnati, OH"},
+    {"key": "in_kroger_46204",        "state": "IN", "region": "Midwest",       "store": "Kroger",        "slug": "kroger",        "zip": "46204", "city": "Indianapolis, IN"},
+    {"key": "mi_kroger_48201",        "state": "MI", "region": "Midwest",       "store": "Kroger",        "slug": "kroger",        "zip": "48201", "city": "Detroit, MI"},
+    {"key": "il_marianos_60607",      "state": "IL", "region": "Midwest",       "store": "Mariano's",     "slug": "marianos",      "zip": "60607", "city": "Chicago, IL"},
+    {"key": "tn_kroger_37203",        "state": "TN", "region": "South",         "store": "Kroger",        "slug": "kroger",        "zip": "37203", "city": "Nashville, TN"},
+    {"key": "ga_kroger_30308",        "state": "GA", "region": "South",         "store": "Kroger",        "slug": "kroger",        "zip": "30308", "city": "Atlanta, GA"},
+    {"key": "tx_kroger_75201",        "state": "TX", "region": "South",         "store": "Kroger",        "slug": "kroger",        "zip": "75201", "city": "Dallas, TX"},
+    {"key": "nc_harris-teeter_28202", "state": "NC", "region": "South",         "store": "Harris Teeter", "slug": "harris-teeter", "zip": "28202", "city": "Charlotte, NC"},
+    {"key": "va_harris-teeter_20176", "state": "VA", "region": "Mid-Atlantic",  "store": "Harris Teeter", "slug": "harris-teeter", "zip": "20176", "city": "Leesburg, VA"},
+    {"key": "co_king-soopers_80202",  "state": "CO", "region": "Mountain West", "store": "King Soopers",  "slug": "king-soopers",  "zip": "80202", "city": "Denver, CO"},
+    {"key": "ut_smiths_84101",        "state": "UT", "region": "Mountain West", "store": "Smith's",       "slug": "smiths",        "zip": "84101", "city": "Salt Lake City, UT"},
+    {"key": "az_frys_85004",          "state": "AZ", "region": "Southwest",     "store": "Fry's",         "slug": "frys",          "zip": "85004", "city": "Phoenix, AZ"},
+    {"key": "ca_ralphs_90024",        "state": "CA", "region": "West Coast",    "store": "Ralphs",        "slug": "ralphs",        "zip": "90024", "city": "Los Angeles, CA"},
+    {"key": "or_fred-meyer_97205",    "state": "OR", "region": "Pacific NW",    "store": "Fred Meyer",    "slug": "fred-meyer",    "zip": "97205", "city": "Portland, OR"},
+    {"key": "wa_qfc_98109",           "state": "WA", "region": "Pacific NW",    "store": "QFC",           "slug": "qfc",           "zip": "98109", "city": "Seattle, WA"},
 ]
 
-BLOCKED_MERCHANTS = ("ebay", "mercari", "poshmark", "etsy", "bonanza", "ubuy", "desertcart", "amazon")
+CHAIN_META = {
+    "GERBES":       ("Gerbes",        "www.gerbes.com"),
+    "KROGER":       ("Kroger",        "www.kroger.com"),
+    "HART":         ("Harris Teeter", "www.harristeeter.com"),
+    "MARIANOS":     ("Mariano's",     "www.marianos.com"),
+    "KINGSOOPERS":  ("King Soopers",  "www.kingsoopers.com"),
+    "SMITHS":       ("Smith's",       "www.smithsfoodanddrug.com"),
+    "FRYS":         ("Fry's",         "www.frysfood.com"),
+    "RALPHS":       ("Ralphs",        "www.ralphs.com"),
+    "FRED":         ("Fred Meyer",    "www.fredmeyer.com"),
+    "QFC":          ("QFC",           "www.qfc.com"),
+    "DILLONS":      ("Dillons",       "www.dillons.com"),
+}
+
 MULTIPACK_RE = re.compile(
-    r"\b(?:pack of\s*[2-9]|pack of\s*\d{2}|\d+\s*-?\s*pack|case of\s*\d+|bundle|lot of\s*\d+|"
-    r"set of\s*\d+|multi-?pack|variety\s*case|bulk|\(\s*[2-9]\s*ct\s*\)|,\s*[2-9]\s*count)\b",
+    r"\b(?:pack of\s*[2-9]|pack of\s*\d{2}|[2-9]\s*-?\s*pack|\d{2}\s*-?\s*pack|\d+\s*pk\b|"
+    r"case of\s*\d+|per case|combo|bundle|lot of\s*\d+|set of\s*\d+|multi-?pack|variety\s*case|bulk|"
+    r"[2-9]x\b|x\s*[2-9]\b|\(\s*[2-9]\s*(?:ct|pack|pk)\s*\))\b",
     re.I,
 )
 
@@ -69,9 +94,16 @@ def parse_oz(text):
     m = re.search(r"(\d+(?:\.\d+)?)\s*lb\b", t)
     if m:
         return float(m.group(1)) * 16.0
-    if "1 gal" in t or "1 gallon" in t:
+    if re.search(r"\b1\s*gal(?:lon)?\b", t):
         return 128.0
+    if re.search(r"\bhalf\s*gal|\b0\.5\s*gal|\b64\s*fl", t):
+        return 64.0
     return None
+
+
+def parse_ct(text):
+    m = re.search(r"(\d+)\s*(?:ct|count|rolls?|mega|pk|pack|bags?|sheets?|wipes?)\b", str(text or "").lower())
+    return int(m.group(1)) if m else None
 
 
 def http_json(url, method="GET", headers=None, data=None, timeout=15):
@@ -121,19 +153,15 @@ def resolve_kroger_locations(token):
             if cfg["slug"].replace("-", " ") in norm(c.get("chain", "")) or cfg["slug"].replace("-", " ") in norm(c.get("name", "")):
                 chosen = c
                 break
+        chain_code = (chosen.get("chain") or "").upper()
+        store_label, domain = CHAIN_META.get(chain_code, (cfg["store"], "www.kroger.com"))
         addr = chosen.get("address") or {}
-        chain_name = (chosen.get("chain") or cfg["store"]).title()
-        if chain_name.upper() == "QFC":
-            chain_name = "QFC"
-        elif chain_name.upper() == "HART":
-            chain_name = "Harris Teeter"
-        domain = "www.qfc.com" if chain_name == "QFC" else cfg["domain"]
         resolved.append({
             **cfg,
-            "store": chain_name,
+            "store": store_label,
             "domain": domain,
             "locationId": chosen["locationId"],
-            "chain": chosen.get("chain"),
+            "chain": chain_code,
             "store_name": chosen.get("name"),
             "address": ", ".join(p for p in [addr.get("addressLine1"), addr.get("city"), addr.get("state"), addr.get("zipCode")] if p),
         })
@@ -141,8 +169,9 @@ def resolve_kroger_locations(token):
 
 
 def pick_best_kroger_product(products, item):
-    target_q = norm(item["query"])
+    target_q = norm(item.get("kroger_term") or item["query"])
     want_oz = item.get("target_oz")
+    want_ct = item.get("target_ct")
     best, best_rank = None, -1.0
     for p in products:
         first = (p.get("items") or [{}])[0] or {}
@@ -153,16 +182,24 @@ def pick_best_kroger_product(products, item):
             continue
         desc = p.get("description", "")
         size_str = first.get("size") or ""
-        sim = fuzz.token_set_ratio(target_q, norm(f"{desc} {size_str}"))
-        if sim < 50:
+        combined = f"{desc} {size_str}"
+        sim = fuzz.token_set_ratio(target_q, norm(combined))
+        if sim < 48:
             continue
-        got_oz = parse_oz(f"{desc} {size_str}")
         adj = 0.0
+        got_oz = parse_oz(combined)
         if want_oz and got_oz:
             ratio = max(want_oz, got_oz) / min(want_oz, got_oz)
-            if ratio > 1.65:
+            if ratio > 1.75:
                 continue
-            adj = 15.0 if ratio <= 1.2 else 0.0
+            adj += 18.0 if ratio <= 1.2 else (-6.0 if ratio > 1.4 else 4.0)
+        elif want_ct:
+            got_ct = parse_ct(combined)
+            if got_ct:
+                ratio = max(want_ct, got_ct) / min(want_ct, got_ct)
+                if ratio > 1.75:
+                    continue
+                adj += 16.0 if ratio <= 1.25 else 0.0
         rank = sim + adj
         if rank > best_rank:
             best_rank = rank
@@ -177,10 +214,11 @@ def pick_best_kroger_product(products, item):
 
 
 def fetch_kroger_for_item(item, locations, token):
-    """Find best anchor SKU at location 0, then query exact UPC at every other location (fallback to search)."""
+    """Find best anchor SKU at location 0, then query exact UPC across all other 15 states (fallback to clean search)."""
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     results = {}
     anchor_upc = None
+    term = (item.get("kroger_term") or item["query"])[:60]
 
     for idx, loc in enumerate(locations):
         lid = loc["locationId"]
@@ -194,7 +232,7 @@ def fetch_kroger_for_item(item, locations, token):
                 pass
         if not chosen:
             try:
-                qs = urllib.parse.urlencode({"filter.term": item["query"][:60], "filter.locationId": lid, "filter.limit": 10})
+                qs = urllib.parse.urlencode({"filter.term": term, "filter.locationId": lid, "filter.limit": 15})
                 res = http_json(f"https://api.kroger.com/v1/products?{qs}", headers=headers)
                 chosen = pick_best_kroger_product(res.get("data", []), item)
             except Exception:
@@ -203,12 +241,14 @@ def fetch_kroger_for_item(item, locations, token):
             if idx == 0 and chosen.get("upc"):
                 anchor_upc = chosen["upc"]
             results[loc["key"]] = {
+                "state": loc["state"],
                 "store": loc["store"],
                 "store_name": loc["store_name"],
                 "city": loc["city"],
                 "zip": loc["zip"],
                 "price": chosen["regular"],
                 "promo_price": chosen["promo"],
+                "size": chosen["size"],
                 "product_title": f"{chosen['description']} ({chosen['size']})".strip() if chosen["size"] else chosen["description"],
                 "upc": chosen["upc"],
                 "same_upc": bool(anchor_upc and chosen["upc"] == anchor_upc),
@@ -218,35 +258,36 @@ def fetch_kroger_for_item(item, locations, token):
     return item["id"], results
 
 
-def fetch_serper_multi_retailer(item):
-    """1 Serper Shopping call captures Walmart, Target, Instacart, Aldi, etc. in a single response."""
+def fetch_first_party_retailer(item, retailer, kroger_median):
+    """
+    Strict first-party Target or Walmart lookup via Serper Shopping:
+      - Requires EXACT source name ('target' or 'walmart') -> rejects ALL 3rd-party marketplace resellers.
+      - Rejects multipacks/cases/bundles.
+      - Enforces strict size check and 0.55x-1.90x median price sanity check.
+    """
     if not SERPER_API_KEY:
-        return item["id"], {}
+        return None
     headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+    q = f"{retailer} {item['query']}"
     try:
         res = http_json(
             "https://google.serper.dev/shopping",
             method="POST",
             headers=headers,
-            data=json.dumps({"q": item["query"], "gl": "us", "hl": "en", "num": 12}).encode(),
+            data=json.dumps({"q": q, "gl": "us", "hl": "en", "num": 15}).encode(),
         )
     except Exception:
-        return item["id"], {}
+        return None
 
-    want_retailers = {
-        "walmart": ("Walmart", "walmart_us"),
-        "target": ("Target", "target_us"),
-        "instacart": ("Instacart", "instacart_us"),
-        "aldi": ("Aldi", "aldi_us"),
-        "wegmans": ("Wegmans", "wegmans_us"),
-        "hy-vee": ("Hy-Vee", "hy-vee_us"),
-    }
-    found = {}
+    want_src = retailer.lower()
     want_oz = item.get("target_oz")
+    want_ct = item.get("target_ct")
+    best, best_rank = None, -1.0
+
     for s in res.get("shopping", []) or []:
-        merch = s.get("source", "") or ""
-        mlow = merch.lower()
-        if any(b in mlow for b in BLOCKED_MERCHANTS) or "seller" in mlow:
+        src = (s.get("source") or "").strip().lower()
+        # STRICT FIRST-PARTY ONLY: reject "Walmart - SomeSellerLLC", "Target - Marketplace", etc.
+        if src != want_src:
             continue
         title = s.get("title", "")
         if MULTIPACK_RE.search(title) and not MULTIPACK_RE.search(item["query"]):
@@ -254,39 +295,53 @@ def fetch_serper_multi_retailer(item):
         price = parse_price(s.get("price"))
         if price is None:
             continue
-        if fuzz.token_set_ratio(norm(item["query"]), norm(title)) < 55:
+        if kroger_median and not (0.55 * kroger_median <= price <= 1.90 * kroger_median):
             continue
+        sim = fuzz.token_set_ratio(norm(item.get("kroger_term") or item["query"]), norm(title))
+        if sim < 52:
+            continue
+        adj = 0.0
         got_oz = parse_oz(title)
-        if want_oz and got_oz and (max(want_oz, got_oz) / min(want_oz, got_oz) > 1.65):
+        if want_oz and got_oz:
+            ratio = max(want_oz, got_oz) / min(want_oz, got_oz)
+            if ratio > 1.45:
+                continue
+            adj += 15.0 if ratio <= 1.2 else 0.0
+        elif want_ct:
+            got_ct = parse_ct(title)
+            if got_ct and (max(want_ct, got_ct) / min(want_ct, got_ct) > 1.45):
+                continue
+        url = s.get("link") or s.get("productUrl")
+        if not url and s.get("productId"):
+            url = f"https://www.google.com/shopping/product/{s['productId']}"
+        if not url:
             continue
-        for needle, (label, rkey) in want_retailers.items():
-            if needle in mlow and rkey not in found:
-                url = s.get("link") or s.get("productUrl")
-                if not url and s.get("productId"):
-                    url = f"https://www.google.com/shopping/product/{s['productId']}"
-                found[rkey] = {
-                    "store": label,
-                    "store_name": merch,
-                    "city": "Online US",
-                    "zip": "US",
-                    "price": price,
-                    "promo_price": None,
-                    "product_title": title,
-                    "upc": None,
-                    "same_upc": False,
-                    "source": "instacart_search" if needle == "instacart" else "google_shopping",
-                    "url": url,
-                }
-                break
-    return item["id"], found
+        rank = sim + adj
+        if rank > best_rank:
+            best_rank = rank
+            best = {
+                "state": "US",
+                "store": retailer,
+                "store_name": f"{retailer} (First-Party Online)",
+                "city": "Online US",
+                "zip": "US",
+                "price": price,
+                "promo_price": None,
+                "size": item.get("target_size", ""),
+                "product_title": title,
+                "upc": None,
+                "same_upc": False,
+                "source": "first_party_shopping",
+                "url": url,
+            }
+    return best
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--basket", default="data/master_basket.json")
-    p.add_argument("--serper-core", action="store_true", default=True, help="Query Serper for core 25 items only (low quota use)")
-    p.add_argument("--no-serper", action="store_true", help="Skip Serper queries entirely")
-    p.add_argument("--max-items", type=int, default=120)
+    p.add_argument("--no-serper", action="store_true")
+    p.add_argument("--serper-max-core", type=int, default=40)
     args = p.parse_args()
 
     if not (KROGER_CLIENT_ID and KROGER_CLIENT_SECRET):
@@ -294,80 +349,88 @@ def main():
         sys.exit(1)
 
     with open(args.basket, encoding="utf-8") as f:
-        basket = json.load(f)[: args.max_items]
+        basket = json.load(f)
 
-    print(f"Loaded {len(basket)} master basket items ({sum(1 for b in basket if b['type']=='grocery')} grocery, {sum(1 for b in basket if b['type']=='non_grocery')} non-grocery).")
+    print(f"Loaded {len(basket)} items ({sum(1 for b in basket if b['type']=='grocery')} grocery, {sum(1 for b in basket if b['type']=='non_grocery')} non-grocery).")
     token = get_kroger_token()
     locations = resolve_kroger_locations(token)
-    print(f"Resolved {len(locations)} Kroger-family locations across US:")
+    print(f"Resolved {len(locations)} Kroger-family locations across {len({l['state'] for l in locations})} US states:")
     for loc in locations:
-        print(f"  - {loc['store']} ({loc['city']} {loc['zip']}): {loc['store_name']} [{loc['locationId']}]")
+        print(f"  - [{loc['state']}] {loc['store']:14s} ({loc['city']} {loc['zip']}): {loc['store_name']} [{loc['locationId']}]")
 
     prices_by_id = {b["id"]: {} for b in basket}
-
     t0 = time.time()
     done = 0
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         futs = [ex.submit(fetch_kroger_for_item, b, locations, token) for b in basket]
         for fut in as_completed(futs):
             iid, res = fut.result()
             prices_by_id[iid].update(res)
             done += 1
             if done % 25 == 0 or done == len(basket):
-                print(f"  Kroger API progress: {done}/{len(basket)} items ({time.time() - t0:.1f}s)")
+                print(f"  16-State Kroger API progress: {done}/{len(basket)} items ({time.time() - t0:.1f}s)")
+
+    # Compute 16-state Kroger medians first so Target & Walmart strict sanity filter uses real anchors.
+    medians = {}
+    for b in basket:
+        ks = sorted(pv["price"] for pv in prices_by_id[b["id"]].values() if pv.get("price"))
+        medians[b["id"]] = ks[len(ks) // 2] if ks else None
 
     serper_queries = 0
     if not args.no_serper and SERPER_API_KEY:
-        core_items = [b for b in basket if b.get("core")]
-        print(f"Running budget-capped Serper multi-retailer sweep on {len(core_items)} core items...")
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            futs = [ex.submit(fetch_serper_multi_retailer, b) for b in core_items]
-            for fut in as_completed(futs):
-                iid, res = fut.result()
-                prices_by_id[iid].update(res)
+        core_items = [b for b in basket if b.get("core")][: args.serper_max_core]
+        print(f"Running strict first-party Target & Walmart sweep on {len(core_items)} core items ({len(core_items)*2} Serper queries)...")
+        tasks = []
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            for b in core_items:
+                for ret in ("Target", "Walmart"):
+                    tasks.append((b["id"], ret, ex.submit(fetch_first_party_retailer, b, ret, medians[b["id"]])))
+            for iid, ret, fut in tasks:
                 serper_queries += 1
-        print(f"  Serper sweep complete ({serper_queries} queries used).")
+                res = fut.result()
+                if res:
+                    prices_by_id[iid][f"us_{ret.lower()}"] = res
+        print(f"  Target/Walmart first-party sweep complete ({serper_queries} queries used).")
 
-    # Assemble rich item rows + location spread stats + apples-to-apples store leaderboard.
+    # Assemble output JSON with state summary, clickable per-store views, and national medians.
     now = datetime.now(timezone.utc).isoformat()
-    out_items = []
     store_meta = {
         loc["key"]: {
-            "key": loc["key"], "store": loc["store"], "store_name": loc["store_name"],
-            "city": loc["city"], "zip": loc["zip"], "address": loc["address"], "locationId": loc["locationId"],
-            "kind": "kroger_api",
+            "key": loc["key"], "state": loc["state"], "region": loc["region"],
+            "store": loc["store"], "store_name": loc["store_name"],
+            "city": loc["city"], "zip": loc["zip"], "address": loc["address"],
+            "locationId": loc["locationId"], "kind": "kroger_api",
         }
         for loc in locations
     }
+    for ret in ("Target", "Walmart"):
+        rk = f"us_{ret.lower()}"
+        if any(rk in prices_by_id[b["id"]] for b in basket):
+            store_meta[rk] = {
+                "key": rk, "state": "US", "region": "National Online",
+                "store": ret, "store_name": f"{ret} (First-Party Online)",
+                "city": "Online US", "zip": "US", "address": "First-party online (3rd-party sellers excluded)",
+                "kind": "first_party_shopping",
+            }
 
+    out_items = []
     for b in basket:
         pmap = prices_by_id[b["id"]]
-        # Drop Serper Shopping bulk/case outliers whose price is >2.2x or <0.45x the Kroger median.
-        k_prices = sorted(pv["price"] for sk, pv in pmap.items() if pv.get("source") == "kroger_api" and pv.get("price"))
-        if k_prices:
-            med = k_prices[len(k_prices) // 2]
-            pmap = {
-                sk: pv for sk, pv in pmap.items()
-                if pv.get("source") == "kroger_api" or (0.45 * med <= (pv.get("price") or 0) <= 2.20 * med)
-            }
-            prices_by_id[b["id"]] = pmap
-        for sk, pv in pmap.items():
-            if sk not in store_meta:
-                store_meta[sk] = {"key": sk, "store": pv["store"], "store_name": pv["store_name"],
-                                  "city": pv["city"], "zip": pv["zip"], "kind": pv["source"]}
         vals = [(sk, pv["price"]) for sk, pv in pmap.items() if pv.get("price") is not None]
         if vals:
+            sorted_p = sorted(v[1] for v in vals)
+            med = sorted_p[len(sorted_p) // 2]
             min_sk, min_p = min(vals, key=lambda x: x[1])
             max_sk, max_p = max(vals, key=lambda x: x[1])
             spread = round(max_p - min_p, 2)
             pct = round((max_p - min_p) / min_p * 100, 1) if min_p > 0 else 0.0
         else:
-            min_sk = max_sk = None
-            min_p = max_p = spread = pct = None
+            med = min_sk = max_sk = min_p = max_p = spread = pct = None
 
         out_items.append({
             **b,
             "prices": pmap,
+            "median_price": med,
             "min_price": min_p,
             "max_price": max_p,
             "cheapest_store_key": min_sk,
@@ -377,32 +440,66 @@ def main():
             "stores_priced": len(vals),
         })
 
-    # Compute apples-to-apples leaderboard across Kroger locations (items priced at ALL 6 Kroger stores).
+    # Common apples-to-apples basket across ALL 16 states!
     k_keys = [loc["key"] for loc in locations]
     common_items = [it for it in out_items if all(k in it["prices"] for k in k_keys)]
+    common_grocery = [it for it in common_items if it["type"] == "grocery"]
+    common_nongrocery = [it for it in common_items if it["type"] == "non_grocery"]
+
     leaderboard = []
     for sk, meta in store_meta.items():
-        all_priced = [it["prices"][sk]["price"] for it in out_items if sk in it["prices"]]
-        common_total = round(sum(it["prices"][sk]["price"] for it in common_items), 2) if sk in k_keys and common_items else None
-        avg_vs_min = []
-        for it in out_items:
-            if sk in it["prices"] and it["min_price"] and it["stores_priced"] >= 2:
-                avg_vs_min.append((it["prices"][sk]["price"] - it["min_price"]) / it["min_price"] * 100.0)
+        all_priced = [it for it in out_items if sk in it["prices"]]
+        same_upc_cnt = sum(1 for it in all_priced if it["prices"][sk].get("same_upc"))
+        is_k = sk in k_keys
+        common_total = round(sum(it["prices"][sk]["price"] for it in common_items), 2) if (is_k and common_items) else None
+        groc_total = round(sum(it["prices"][sk]["price"] for it in common_grocery), 2) if (is_k and common_grocery) else None
+        ng_total = round(sum(it["prices"][sk]["price"] for it in common_nongrocery), 2) if (is_k and common_nongrocery) else None
+
+        vs_med = []
+        vs_min = []
+        for it in all_priced:
+            p = it["prices"][sk]["price"]
+            if it["median_price"]:
+                vs_med.append((p - it["median_price"]) / it["median_price"] * 100.0)
+            if it["min_price"] and it["stores_priced"] >= 2:
+                vs_min.append((p - it["min_price"]) / it["min_price"] * 100.0)
+
         leaderboard.append({
             **meta,
             "items_priced": len(all_priced),
+            "grocery_priced": sum(1 for it in all_priced if it["type"] == "grocery"),
+            "non_grocery_priced": sum(1 for it in all_priced if it["type"] == "non_grocery"),
+            "same_upc_count": same_upc_cnt,
             "common_basket_items": len(common_items) if common_total is not None else 0,
             "common_basket_total": common_total,
-            "avg_pct_above_lowest": round(sum(avg_vs_min) / len(avg_vs_min), 1) if avg_vs_min else 0.0,
+            "common_grocery_total": groc_total,
+            "common_non_grocery_total": ng_total,
+            "avg_pct_vs_median": round(sum(vs_med) / len(vs_med), 1) if vs_med else 0.0,
+            "avg_pct_above_lowest": round(sum(vs_min) / len(vs_min), 1) if vs_min else 0.0,
         })
-    leaderboard.sort(key=lambda r: (0 if r["common_basket_total"] is not None else 1, r["common_basket_total"] or 9999, r["avg_pct_above_lowest"]))
+
+    # Compute % vs cheapest state for the state-by-state comparison bar!
+    k_totals = [r["common_basket_total"] for r in leaderboard if r["common_basket_total"] is not None]
+    cheapest_total = min(k_totals) if k_totals else None
+    for r in leaderboard:
+        if r["common_basket_total"] is not None and cheapest_total:
+            r["pct_above_cheapest_state"] = round((r["common_basket_total"] - cheapest_total) / cheapest_total * 100.0, 1)
+            r["dollars_above_cheapest_state"] = round(r["common_basket_total"] - cheapest_total, 2)
+        else:
+            r["pct_above_cheapest_state"] = None
+            r["dollars_above_cheapest_state"] = None
+
+    leaderboard.sort(key=lambda r: (0 if r["common_basket_total"] is not None else 1, r["common_basket_total"] or 9999, r["avg_pct_vs_median"]))
 
     doc = {
         "generated_at": now,
         "total_items": len(out_items),
         "grocery_count": sum(1 for i in out_items if i["type"] == "grocery"),
         "non_grocery_count": sum(1 for i in out_items if i["type"] == "non_grocery"),
+        "states_count": len({loc["state"] for loc in locations}),
         "common_kroger_items": len(common_items),
+        "common_grocery_items": len(common_grocery),
+        "common_non_grocery_items": len(common_nongrocery),
         "serper_queries_used": serper_queries,
         "stores": leaderboard,
         "items": out_items,
@@ -416,9 +513,9 @@ def main():
         ContentType="application/json",
         CacheControl="no-cache",
     )
-    print(f"Uploaded s3://{BUCKET}/public/staple_basket.json ({len(out_items)} items, {len(common_items)} common across all {len(k_keys)} Kroger locations)")
+    print(f"\nUploaded s3://{BUCKET}/public/staple_basket.json ({len(out_items)} total items, {len(common_items)} shared across ALL {len(locations)} states!)")
 
-    # Also seed online-catalog/<slug>_<zip>.json for each Kroger location so scans hit S3 cache for $0!
+    # Seed S3 7-day cache for each of the 16 states so phone scans hit cache at $0!
     for loc in locations:
         sk = loc["key"]
         cat_items = []
@@ -427,38 +524,28 @@ def main():
             if not pv:
                 continue
             cat_items.append({
-                "name": pv["product_title"],
-                "upc": pv["upc"],
-                "price": pv["price"],
-                "promo_price": pv["promo_price"],
-                "merchant": pv["store_name"],
-                "source": "kroger_api",
-                "store_match": "exact_store",
-                "url": pv["url"],
-                "fetched_at": now,
+                "name": pv["product_title"], "upc": pv["upc"], "price": pv["price"],
+                "promo_price": pv["promo_price"], "merchant": pv["store_name"],
+                "source": "kroger_api", "store_match": "exact_store",
+                "url": pv["url"], "fetched_at": now,
             })
         ckey = f"online-catalog/{loc['slug']}_{loc['zip']}.json"
         s3.put_object(
-            Bucket=BUCKET,
-            Key=ckey,
+            Bucket=BUCKET, Key=ckey,
             Body=json.dumps({
-                "store": loc["store"],
-                "zip_code": loc["zip"],
-                "resolved_store": {
-                    "locationId": loc["locationId"], "chain": loc["chain"],
-                    "name": loc["store_name"], "address": loc["address"],
-                },
-                "updated_at": now,
-                "items": cat_items,
+                "store": loc["store"], "zip_code": loc["zip"],
+                "resolved_store": {"locationId": loc["locationId"], "chain": loc["chain"], "name": loc["store_name"], "address": loc["address"]},
+                "updated_at": now, "items": cat_items,
             }, indent=2).encode(),
             ContentType="application/json",
         )
-        print(f"  Seeded {ckey} ({len(cat_items)} items)")
 
-    print("\n=== STORE LEADERBOARD (COMMON BASKET) ===")
-    for row in leaderboard:
-        tot = f"${row['common_basket_total']:.2f} ({row['common_basket_items']} common)" if row["common_basket_total"] else f"{row['items_priced']} items"
-        print(f"  {row['store']:15s} {row['city']:18s} | {tot:26s} | avg +{row['avg_pct_above_lowest']}% vs lowest")
+    print("\n=== 16-STATE + NATIONAL RETAILERS LEADERBOARD ===")
+    for r in leaderboard:
+        if r["common_basket_total"] is not None:
+            print(f"  [{r['state']}] {r['store']:14s} {r['city']:18s} | {r['items_priced']:3d} items | shared({r['common_basket_items']}): ${r['common_basket_total']:6.2f} (+${r['dollars_above_cheapest_state']:5.2f} / +{r['pct_above_cheapest_state']:4.1f}%)")
+        else:
+            print(f"  [{r['state']}] {r['store']:14s} {r['city']:18s} | {r['items_priced']:3d} core items | avg vs median: {r['avg_pct_vs_median']:+5.1f}%")
 
 
 if __name__ == "__main__":
