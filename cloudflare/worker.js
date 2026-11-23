@@ -684,15 +684,150 @@ const PAGE = `<!doctype html>
       </div>
     </template>
 
-    <!-- OVERVIEW: State-by-State Summary + National Retailers + 130-Item Cross-Store Explorer -->
+    <!-- OVERVIEW: Shopping Style + Head-to-Head Compare Anything + State Summary + 131-Item Explorer -->
     <template x-if="!selectedStore">
       <div class="space-y-5">
+
+        <!-- Shopping Style Switcher (Name Brand vs Store Brand vs Cheapest Mix) -->
+        <div class="bg-white rounded-2xl border border-stone-200 p-4 sm:p-5 space-y-3">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 class="text-base sm:text-lg font-semibold">Shopping Style: Name Brand vs. Store Brand</h2>
+              <p class="text-xs text-stone-500">Switch how baskets are priced across every state and comparison below.</p>
+            </div>
+            <div class="inline-flex rounded-xl bg-stone-100 p-1 text-xs sm:text-sm">
+              <button type="button" @click="brandMode = 'national'"
+                :class="brandMode === 'national' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'"
+                class="px-3 py-1.5 rounded-lg transition">&#11088; Name Brand</button>
+              <button type="button" @click="brandMode = 'store_brand'"
+                :class="brandMode === 'store_brand' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'"
+                class="px-3 py-1.5 rounded-lg transition">&#128176; I Buy Store Brand</button>
+              <button type="button" @click="brandMode = 'cheapest'"
+                :class="brandMode === 'cheapest' ? 'bg-white shadow-sm text-[#15803D] font-semibold' : 'text-stone-500'"
+                class="px-3 py-1.5 rounded-lg transition">&#127919; Lowest (Incl. Sales)</button>
+            </div>
+          </div>
+          <div x-show="brandMode === 'store_brand'" class="rounded-xl bg-green-50 border border-green-200 px-3.5 py-2 text-xs text-green-900">
+            <strong>Store Brand Mode active:</strong> Every national brand item (like mayo, ketchup, cereal, pasta, detergent, paper towels) is swapped to each store's own private-label equivalent where available.
+          </div>
+          <div x-show="brandMode === 'cheapest'" class="rounded-xl bg-sky-50 border border-sky-200 px-3.5 py-2 text-xs text-sky-900">
+            <strong>Lowest Option Mode active:</strong> Automatically picks whichever is cheapest for each item &mdash; Name Brand, Store Brand, or active Store Sale/Promo price.
+          </div>
+        </div>
+
+        <!-- Head-to-Head Compare Any State or Store Calculator -->
+        <div class="bg-white rounded-2xl border border-stone-200 p-5 space-y-4">
+          <div>
+            <h2 class="text-lg font-semibold">&#9878;&#65039; Compare Any Store or State Head-to-Head</h2>
+            <p class="text-xs text-stone-500">See how your state or local store stacks up against another state, a rival store in the same city, or the 16-state national average.</p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="block">
+              <span class="text-xs font-medium text-stone-500">My Store / State (A)</span>
+              <select x-model="cmpA" class="mt-1 w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#15803D]">
+                <template x-for="opt in compareOptions(false)" :key="opt.key">
+                  <option :value="opt.key" x-text="opt.label"></option>
+                </template>
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-xs font-medium text-stone-500">Compare Against (B)</span>
+              <select x-model="cmpB" class="mt-1 w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#15803D]">
+                <template x-for="opt in compareOptions(true)" :key="opt.key">
+                  <option :value="opt.key" x-text="opt.label"></option>
+                </template>
+              </select>
+            </label>
+          </div>
+
+          <!-- 1-Click Preset Comparisons -->
+          <div class="flex flex-wrap gap-1.5 text-xs">
+            <button type="button" @click="setPreset('mo_gerbes_65203','AVG_STATE')" class="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-green-100 text-stone-700">MO Gerbes vs. Avg State</button>
+            <button type="button" @click="setPreset('mo_gerbes_65203','mo_hyvee_65203')" class="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-green-100 text-stone-700">Columbia MO: Gerbes vs. Hy-Vee</button>
+            <button type="button" @click="setPreset('va_kroger_22901','va_harris-teeter_20176')" class="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-green-100 text-stone-700">Virginia: Kroger vs. Harris Teeter</button>
+            <button type="button" @click="setPreset('mo_gerbes_65203','va_harris-teeter_20176')" class="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-green-100 text-stone-700">MO Gerbes vs. VA Harris Teeter</button>
+            <button type="button" @click="setPreset('in_kroger_46204','wa_qfc_98109')" class="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-green-100 text-stone-700">IN Kroger vs. WA QFC</button>
+            <button type="button" @click="setPreset('mo_gerbes_65203','us_target')" class="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-green-100 text-stone-700">MO Gerbes vs. Target</button>
+            <button type="button" @click="setPreset('mo_gerbes_65203','us_walmart')" class="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-green-100 text-stone-700">MO Gerbes vs. Walmart</button>
+          </div>
+
+          <!-- Instant Verdict Banner -->
+          <template x-if="compareResult().count > 0">
+            <div class="space-y-3">
+              <div class="rounded-2xl border p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-center"
+                :class="compareResult().diff <= 0 ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'">
+                <div>
+                  <div class="text-xs text-stone-500" x-text="compareResult().labelA"></div>
+                  <div class="text-2xl font-bold text-stone-900" x-text="money(compareResult().totalA)"></div>
+                  <div class="text-[11px] text-stone-500" x-text="'Wins on ' + compareResult().winsA + ' of ' + compareResult().count + ' shared items'"></div>
+                </div>
+                <div>
+                  <div class="text-xs text-stone-500" x-text="compareResult().labelB"></div>
+                  <div class="text-2xl font-bold text-stone-900" x-text="money(compareResult().totalB)"></div>
+                  <div class="text-[11px] text-stone-500" x-text="'Wins on ' + compareResult().winsB + ' items (' + compareResult().ties + ' tied)'"></div>
+                </div>
+                <div>
+                  <div class="text-xs font-semibold uppercase tracking-wide"
+                    :class="compareResult().diff <= 0 ? 'text-[#15803D]' : 'text-amber-800'"
+                    x-text="compareResult().diff <= 0 ? 'Store A saves you' : 'Store B saves you'"></div>
+                  <div class="text-2xl font-bold"
+                    :class="compareResult().diff <= 0 ? 'text-[#15803D]' : 'text-amber-700'"
+                    x-text="money(Math.abs(compareResult().diff)) + ' (' + Math.abs(compareResult().pct).toFixed(1) + '%)'"></div>
+                  <div class="text-[11px] text-stone-500" x-text="'Across ' + compareResult().count + ' apples-to-apples items'"></div>
+                </div>
+              </div>
+
+              <details class="rounded-xl border border-stone-200 p-3">
+                <summary class="cursor-pointer text-sm font-semibold text-[#15803D]">
+                  Inspect all <span x-text="compareResult().count"></span> head-to-head items (sorted by biggest savings)
+                </summary>
+                <div class="overflow-x-auto mt-3">
+                  <table class="w-full text-xs sm:text-sm">
+                    <thead class="text-stone-500 border-b border-stone-200">
+                      <tr>
+                        <th class="text-left font-medium py-1.5 pr-3">Item</th>
+                        <th class="text-left font-medium py-1.5 pr-3" x-text="compareResult().shortA"></th>
+                        <th class="text-left font-medium py-1.5 pr-3" x-text="compareResult().shortB"></th>
+                        <th class="text-left font-medium py-1.5">Difference</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="row in compareResult().rows" :key="row.id">
+                        <tr class="border-b border-stone-100">
+                          <td class="py-2 pr-3">
+                            <div class="font-medium" x-text="row.name"></div>
+                            <div class="text-[11px] text-stone-400" x-show="row.a.isStoreBrand || row.b.isStoreBrand"
+                              x-text="(row.a.isStoreBrand ? 'A: ' + row.a.title : '') + (row.a.isStoreBrand && row.b.isStoreBrand ? ' | ' : '') + (row.b.isStoreBrand ? 'B: ' + row.b.title : '')"></div>
+                          </td>
+                          <td class="py-2 pr-3 whitespace-nowrap">
+                            <span class="font-semibold" x-text="money(row.a.price)"></span>
+                            <a x-show="row.a.url" :href="row.a.url" target="_blank" rel="noopener noreferrer" class="ml-1 text-[11px] text-[#15803D] underline">&#8599;</a>
+                          </td>
+                          <td class="py-2 pr-3 whitespace-nowrap">
+                            <span class="font-semibold" x-text="money(row.b.price)"></span>
+                            <a x-show="row.b.url" :href="row.b.url" target="_blank" rel="noopener noreferrer" class="ml-1 text-[11px] text-[#15803D] underline">&#8599;</a>
+                          </td>
+                          <td class="py-2 whitespace-nowrap font-semibold text-xs"
+                            :class="row.diff < 0 ? 'text-[#15803D]' : (row.diff > 0 ? 'text-amber-700' : 'text-stone-400')"
+                            x-text="row.diff === 0 ? 'Tie' : (row.diff < 0 ? compareResult().shortA + ' -' + money(Math.abs(row.diff)) : compareResult().shortB + ' -' + money(row.diff))"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </div>
+          </template>
+          <p x-show="compareResult().count === 0" class="text-xs text-stone-400">Pick two different stores/states above to compare their shared items.</p>
+        </div>
+
         <div class="bg-white rounded-2xl border border-stone-200 p-5 space-y-4">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <h2 class="text-lg font-semibold">How Grocery &amp; Household Prices Vary by State</h2>
               <p class="text-xs text-stone-500"
-                x-text="(basket.total_items || 120) + '-item basket (' + (basket.grocery_count || 100) + ' grocery + ' + (basket.non_grocery_count || 20) + ' non-grocery) across ' + (basket.states_count || 0) + ' US states. Click any state or store to see every item price and direct product link.'"></p>
+                x-text="(basket.total_items || 130) + '-item basket (' + (basket.grocery_count || 108) + ' grocery + ' + (basket.non_grocery_count || 22) + ' non-grocery) across ' + (basket.states_count || 0) + ' US states. Click any state or store to see every item price and direct product link.'"></p>
             </div>
             <span class="text-xs text-stone-400" x-show="basket.generated_at" x-text="'Updated ' + when(basket.generated_at)"></span>
           </div>
@@ -701,20 +836,20 @@ const PAGE = `<!doctype html>
           <div x-show="stateStores().length >= 2" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div class="rounded-xl bg-green-50 border border-green-200 p-3.5">
               <div class="text-xs text-green-800 font-medium">Cheapest State Basket</div>
-              <div class="text-2xl font-bold text-[#15803D] mt-0.5" x-text="money(stateStores()[0].common_basket_total)"></div>
+              <div class="text-2xl font-bold text-[#15803D] mt-0.5" x-text="money(displayBasketTotal(stateStores()[0]))"></div>
               <div class="text-xs text-stone-600" x-text="stateStores()[0].state + ' \\u00B7 ' + stateStores()[0].store + ' (' + stateStores()[0].city + ')'"></div>
             </div>
             <div class="rounded-xl bg-amber-50 border border-amber-200 p-3.5">
               <div class="text-xs text-amber-800 font-medium">Most Expensive State Basket</div>
-              <div class="text-2xl font-bold text-amber-700 mt-0.5" x-text="money(stateStores()[stateStores().length - 1].common_basket_total)"></div>
+              <div class="text-2xl font-bold text-amber-700 mt-0.5" x-text="money(displayBasketTotal(stateStores()[stateStores().length - 1]))"></div>
               <div class="text-xs text-stone-600" x-text="stateStores()[stateStores().length - 1].state + ' \\u00B7 ' + stateStores()[stateStores().length - 1].store + ' (' + stateStores()[stateStores().length - 1].city + ')'"></div>
             </div>
             <div class="rounded-xl bg-stone-50 border border-stone-200 p-3.5">
               <div class="text-xs text-stone-500 font-medium">Same-Company State Spread</div>
               <div class="text-2xl font-bold text-stone-900 mt-0.5"
-                x-text="'+' + money(stateStores()[stateStores().length - 1].dollars_above_cheapest_state)"></div>
+                x-text="'+' + money(displayBasketTotal(stateStores()[stateStores().length - 1]) - displayBasketTotal(stateStores()[0]))"></div>
               <div class="text-xs text-stone-500"
-                x-text="'+' + Number(stateStores()[stateStores().length - 1].pct_above_cheapest_state || 0).toFixed(1) + '% across ' + (basket.common_kroger_items || 0) + ' identical shared items'"></div>
+                x-text="'Across ' + (basket.common_kroger_items || 0) + ' shared items (' + (brandMode === 'store_brand' ? 'Store Brand mode' : 'Name Brand mode') + ')'"></div>
             </div>
           </div>
 
@@ -729,38 +864,38 @@ const PAGE = `<!doctype html>
                   <div class="flex items-center justify-between gap-1">
                     <span class="font-bold text-sm text-stone-900" x-text="s.state + ' \\u00B7 ' + s.store"></span>
                     <span class="text-[11px] font-semibold px-1.5 py-0.5 rounded"
-                      :class="idx === 0 ? 'bg-[#15803D] text-white' : (s.pct_above_cheapest_state > 15 ? 'bg-amber-100 text-amber-800' : 'bg-stone-200 text-stone-700')"
-                      x-text="idx === 0 ? 'Lowest' : '+' + Number(s.pct_above_cheapest_state || 0).toFixed(1) + '%'"></span>
+                      :class="idx === 0 ? 'bg-[#15803D] text-white' : (statePctAbove(s) > 15 ? 'bg-amber-100 text-amber-800' : 'bg-stone-200 text-stone-700')"
+                      x-text="idx === 0 ? 'Lowest' : '+' + statePctAbove(s).toFixed(1) + '%'"></span>
                   </div>
                   <div class="text-[11px] text-stone-500 truncate" x-text="s.city + ' ' + s.zip + ' \\u00B7 ' + s.items_priced + ' items'"></div>
                   <div class="mt-1.5 flex items-baseline justify-between">
-                    <span class="text-lg font-bold text-stone-900" x-text="money(s.common_basket_total)"></span>
+                    <span class="text-lg font-bold text-stone-900" x-text="money(displayBasketTotal(s))"></span>
                     <span class="text-[11px] text-[#15803D] font-medium">View all &rarr;</span>
                   </div>
                   <div class="w-full bg-stone-200 rounded-full h-1.5 mt-1.5 overflow-hidden">
-                    <div class="h-1.5 rounded-full" :class="idx === 0 ? 'bg-[#15803D]' : (s.pct_above_cheapest_state > 15 ? 'bg-amber-500' : 'bg-emerald-600')"
+                    <div class="h-1.5 rounded-full" :class="idx === 0 ? 'bg-[#15803D]' : (statePctAbove(s) > 15 ? 'bg-amber-500' : 'bg-emerald-600')"
                       :style="'width:' + stateBarPct(s) + '%'"></div>
                   </div>
-                  <div class="text-[10px] text-stone-400 mt-1" x-show="s.common_grocery_total"
-                    x-text="'Grocery ' + money(s.common_grocery_total) + ' \\u00B7 Household ' + money(s.common_non_grocery_total)"></div>
+                  <div class="text-[10px] text-emerald-700 mt-1" x-show="s.store_brand_savings > 0"
+                    x-text="'Store brand saves ' + money(s.store_brand_savings) + ' (' + s.store_brand_pairs + ' swaps)'"></div>
                 </button>
               </template>
             </div>
           </div>
 
-          <!-- National First-Party Online Retailers (Target, Walmart) -->
+          <!-- Local & National First-Party Retailers (Hy-Vee Columbia MO, Target, Walmart) -->
           <div x-show="nationalStores().length" class="space-y-2 pt-2 border-t border-stone-100">
-            <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">National Online Retailers (First-Party Only &mdash; 3rd-Party Resellers &amp; Multipacks Excluded)</div>
+            <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">Additional Local &amp; National Stores (First-Party Only &mdash; 3rd-Party Resellers Excluded)</div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <template x-for="s in nationalStores()" :key="s.key">
                 <button type="button" @click="openStoreDetail(s)"
                   class="text-left rounded-xl border border-stone-200 bg-white p-3 hover:border-[#15803D] hover:shadow-sm transition">
                   <div class="flex items-center justify-between">
-                    <span class="font-bold text-sm" x-text="s.store + ' (Online)'"></span>
+                    <span class="font-bold text-sm" x-text="(s.state && s.state !== 'US' ? s.state + ' \\u00B7 ' : '') + s.store"></span>
                     <span class="text-xs font-semibold" :class="s.avg_pct_vs_median <= 0 ? 'text-[#15803D]' : 'text-amber-700'"
                       x-text="(s.avg_pct_vs_median > 0 ? '+' : '') + Number(s.avg_pct_vs_median || 0).toFixed(1) + '% vs median'"></span>
                   </div>
-                  <div class="text-xs text-stone-500 mt-1" x-text="s.items_priced + ' verified core items priced \\u00B7 View all \\u2192'"></div>
+                  <div class="text-xs text-stone-500 mt-1" x-text="s.city + ' \\u00B7 ' + s.items_priced + ' verified items \\u00B7 View all \\u2192'"></div>
                 </button>
               </template>
             </div>
@@ -983,6 +1118,7 @@ function app() {
     runs: [], history: { products: {} }, hq: '',
     basket: { stores: [], items: [] }, bType: 'all', bCat: '', bq: '', bSort: 'spread',
     selectedStore: null, sqFilter: '', sSort: 'diff',
+    brandMode: 'national', cmpA: 'mo_gerbes_65203', cmpB: 'AVG_STATE',
     q: '', sortKey: 'dollar_markup', sortDir: -1, qOpen: false,
     adminUnlocked: false, adminPin: '', verifyMsg: '',
     lightbox: { open: false, src: '', title: '', item: null },
@@ -1071,16 +1207,99 @@ function app() {
         });
     },
 
-    // ---------- staple basket helpers ----------
-    stateStores() { return (this.basket.stores || []).filter(s => s.common_basket_total != null); },
+    // ---------- staple basket & compare-anything helpers ----------
+    effectivePriceObj(pv) {
+      if (!pv) return null;
+      const sb = pv.store_brand;
+      const natPrice = pv.price;
+      const natSale = pv.promo_price || natPrice;
+      if (this.brandMode === 'store_brand' && sb && sb.price != null) {
+        return { price: sb.price, promo: sb.promo_price, title: sb.product_title, url: sb.url || pv.url, isStoreBrand: true };
+      }
+      if (this.brandMode === 'cheapest') {
+        const candidates = [{ price: natSale, promo: pv.promo_price, title: pv.product_title, url: pv.url, isStoreBrand: false }];
+        if (sb && sb.price != null) {
+          candidates.push({ price: sb.promo_price || sb.price, promo: sb.promo_price, title: sb.product_title, url: sb.url || pv.url, isStoreBrand: true });
+        }
+        candidates.sort((a, b) => (a.price || 999) - (b.price || 999));
+        return candidates[0];
+      }
+      return { price: natPrice, promo: pv.promo_price, title: pv.product_title, url: pv.url, isStoreBrand: false };
+    },
+    displayBasketTotal(s) {
+      if (!s) return 0;
+      if (this.brandMode === 'store_brand' && s.store_brand_basket_total != null) return s.store_brand_basket_total;
+      return s.common_basket_total || 0;
+    },
+    stateStores() {
+      const list = (this.basket.stores || []).filter(s => s.common_basket_total != null).slice();
+      list.sort((a, b) => this.displayBasketTotal(a) - this.displayBasketTotal(b));
+      return list;
+    },
     nationalStores() { return (this.basket.stores || []).filter(s => s.common_basket_total == null); },
+    statePctAbove(s) {
+      const list = this.stateStores();
+      if (!list.length) return 0;
+      const lo = this.displayBasketTotal(list[0]) || 1;
+      return ((this.displayBasketTotal(s) - lo) / lo) * 100;
+    },
     stateBarPct(s) {
       const list = this.stateStores();
       if (!list.length) return 100;
-      const hi = list[list.length - 1].common_basket_total || 1;
-      const lo = list[0].common_basket_total || 0;
+      const hi = this.displayBasketTotal(list[list.length - 1]) || 1;
+      const lo = this.displayBasketTotal(list[0]) || 0;
       if (hi <= lo) return 100;
-      return Math.max(18, Math.round((s.common_basket_total / hi) * 100));
+      return Math.max(18, Math.round((this.displayBasketTotal(s) / hi) * 100));
+    },
+    compareOptions(includeAvg) {
+      const opts = [];
+      if (includeAvg) opts.push({ key: 'AVG_STATE', label: '16-State National Average' });
+      for (const s of (this.basket.stores || [])) {
+        const prefix = (s.state && s.state !== 'US') ? (s.state + ' \\u00B7 ') : '';
+        opts.push({ key: s.key, label: prefix + s.store + ' (' + s.city + ') \\u2014 ' + s.items_priced + ' items' });
+      }
+      return opts;
+    },
+    setPreset(a, b) {
+      const keys = new Set((this.basket.stores || []).map(s => s.key));
+      if (keys.has(a)) this.cmpA = a;
+      if (b === 'AVG_STATE' || keys.has(b)) this.cmpB = b;
+    },
+    compareResult() {
+      const empty = { count: 0, totalA: 0, totalB: 0, diff: 0, pct: 0, winsA: 0, winsB: 0, ties: 0, rows: [], labelA: '', labelB: '', shortA: 'A', shortB: 'B' };
+      if (!this.cmpA || !this.cmpB || this.cmpA === this.cmpB) return empty;
+      const sA = (this.basket.stores || []).find(s => s.key === this.cmpA);
+      const sB = this.cmpB === 'AVG_STATE' ? null : (this.basket.stores || []).find(s => s.key === this.cmpB);
+      if (!sA || (this.cmpB !== 'AVG_STATE' && !sB)) return empty;
+
+      const rows = [];
+      let totalA = 0, totalB = 0, winsA = 0, winsB = 0, ties = 0;
+      for (const it of (this.basket.items || [])) {
+        if (this.bType !== 'all' && it.type !== this.bType) continue;
+        if (this.bCat && it.category !== this.bCat) continue;
+        const pA = this.effectivePriceObj(it.prices && it.prices[this.cmpA]);
+        if (!pA || pA.price == null) continue;
+        let pB = null;
+        if (this.cmpB === 'AVG_STATE') {
+          const avgP = (this.brandMode === 'store_brand' && it.store_brand_avg_price != null) ? it.store_brand_avg_price : (it.avg_price || it.median_price);
+          if (avgP != null) pB = { price: avgP, title: '16-State Average', url: null, isStoreBrand: this.brandMode === 'store_brand' && it.store_brand_avg_price != null };
+        } else {
+          pB = this.effectivePriceObj(it.prices && it.prices[this.cmpB]);
+        }
+        if (!pB || pB.price == null) continue;
+        const diff = Math.round((pA.price - pB.price) * 100) / 100;
+        totalA += pA.price; totalB += pB.price;
+        if (diff < -0.005) winsA++; else if (diff > 0.005) winsB++; else ties++;
+        rows.push({ id: it.id, name: it.name, a: pA, b: pB, diff: diff });
+      }
+      rows.sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
+      const diff = Math.round((totalA - totalB) * 100) / 100;
+      const pct = totalB > 0 ? (diff / totalB) * 100 : 0;
+      const labelA = (sA.state && sA.state !== 'US' ? sA.state + ' \\u00B7 ' : '') + sA.store + ' (' + sA.city + ')';
+      const labelB = sB ? ((sB.state && sB.state !== 'US' ? sB.state + ' \\u00B7 ' : '') + sB.store + ' (' + sB.city + ')') : '16-State National Average';
+      const shortA = (sA.state && sA.state !== 'US' ? sA.state + ' ' : '') + sA.store;
+      const shortB = sB ? ((sB.state && sB.state !== 'US' ? sB.state + ' ' : '') + sB.store) : 'Avg State';
+      return { count: rows.length, totalA: Math.round(totalA * 100) / 100, totalB: Math.round(totalB * 100) / 100, diff: diff, pct: pct, winsA: winsA, winsB: winsB, ties: ties, rows: rows, labelA: labelA, labelB: labelB, shortA: shortA, shortB: shortB };
     },
     openStoreDetail(s) {
       this.selectedStore = s; this.sqFilter = '';
@@ -1091,15 +1310,18 @@ function app() {
       const sk = this.selectedStore.key, q = this.sqFilter.toLowerCase().trim();
       let list = [];
       for (const it of (this.basket.items || [])) {
-        const p = it.prices && it.prices[sk];
-        if (!p) continue;
+        const raw = it.prices && it.prices[sk];
+        if (!raw) continue;
+        const eff = this.effectivePriceObj(raw);
+        if (!eff || eff.price == null) continue;
         if (this.bType !== 'all' && it.type !== this.bType) continue;
         if (this.bCat && it.category !== this.bCat) continue;
-        if (q && (it.name + ' ' + it.category + ' ' + (p.product_title || '')).toLowerCase().indexOf(q) < 0) continue;
-        const med = it.median_price;
-        const diff = (med != null && p.price != null) ? Math.round((p.price - med) * 100) / 100 : null;
+        if (q && (it.name + ' ' + it.category + ' ' + (eff.title || '')).toLowerCase().indexOf(q) < 0) continue;
+        const med = (this.brandMode === 'store_brand' && it.store_brand_avg_price != null) ? it.store_brand_avg_price : it.median_price;
+        const diff = (med != null) ? Math.round((eff.price - med) * 100) / 100 : null;
         const diffPct = (med && diff != null) ? (diff / med) * 100 : 0;
-        list.push({ id: it.id, name: it.name, category: it.category, median_price: med, p: p, diff: diff, diffPct: diffPct });
+        const viewP = Object.assign({}, raw, { price: eff.price, promo_price: eff.promo, product_title: eff.title, url: eff.url });
+        list.push({ id: it.id, name: it.name, category: it.category, median_price: med, p: viewP, diff: diff, diffPct: diffPct });
       }
       if (this.sSort === 'diff') list.sort((a, b) => Math.abs(b.diff || 0) - Math.abs(a.diff || 0));
       else if (this.sSort === 'price') list.sort((a, b) => (a.p.price || 999) - (b.p.price || 999));
